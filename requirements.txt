@@ -3,5 +3,3 @@ pandas
 numpy
 tensorflow-cpu
 scikit-learn
-markdown-it-py
-rich
