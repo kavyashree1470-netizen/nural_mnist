@@ -1,6 +1,6 @@
 streamlit
-pandas
 numpy
+pandas
 tensorflow==2.21.0
 ploty
 scikit-learn
