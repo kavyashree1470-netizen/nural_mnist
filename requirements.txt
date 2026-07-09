@@ -2,4 +2,5 @@ streamlit
 numpy
 pandas
 tensorflow-cpu
+streamlit_drawable_canvas
 plotly
