@@ -1,6 +1,5 @@
 streamlit
 numpy
 pandas
-tensorflow==2.16.0
-ploty
-scikit-learn
+tensorflow-cpu
+plotly
