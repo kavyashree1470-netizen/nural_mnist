@@ -629,7 +629,7 @@ with tab_sandbox:
     with col_save:
         st.subheader("🚀 Prediction & Cloud Sync")
         
-        username_val = st.text_input("👤 Operator Name", value="Developer", placeholder="Enter your name...")
+        username_val = st.text_input("👤 Operator Name", value="Enter your name", placeholder="Enter your name...")
         assigned_label = st.selectbox("Assign True Digit Label", list(range(10)))
         
         st.markdown("---")
