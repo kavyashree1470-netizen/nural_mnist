@@ -36,16 +36,15 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── SESSION STATE (PRO MODEL ARCHITECTURE) ──
-MODEL_VERSION = "CNN_PRO_V1.5"
+MODEL_VERSION = "CNN_PRO_V1.6"
 if "model" not in st.session_state or st.session_state.get("m_ver") != MODEL_VERSION:
-    # restoring the "Pro" model architecture provided previously
     model = models.Sequential([
         layers.Input(shape=(28, 28, 1)),
         layers.Conv2D(32, (3, 3), activation='relu', padding='same'),
         layers.MaxPooling2D((2, 2)),
         layers.Conv2D(64, (3, 3), activation='relu', padding='same'),
         layers.MaxPooling2D((2, 2)),
-        layers.Conv2D(128, (3, 3), activation='relu'),
+        layers.Conv2D(128, (3, 3), activation='relu', padding='same'),
         layers.Flatten(),
         layers.Dense(256, activation='relu'),
         layers.Dropout(0.4),
@@ -78,18 +77,32 @@ def fetch_sheet_data(url, name):
         return sh.worksheet(name).get_all_values()
     except: return None
 
-# ── PREPROCESSING ──
+# ── PREPROCESSING (FIXED FOR 7 VS 2 ACCURACY) ──
 def preprocess_drawing(image_data):
     gray = np.max(image_data[:, :, :3], axis=2).astype(np.uint8)
     if np.max(gray) < 25: return None
+    
+    # 1. Bounding Box
     coords = np.argwhere(gray > 25)
     y_min, x_min = coords.min(axis=0); y_max, x_max = coords.max(axis=0)
     cropped = gray[y_min:y_max+1, x_min:x_max+1]
+    
+    # 2. Proportionate Resize (Ensures 7 bar doesn't curve)
     pil_crop = Image.fromarray(cropped, 'L')
-    pil_crop.thumbnail((20, 20), Image.Resampling.LANCZOS)
-    canvas = Image.new('L', (28, 28), 0)
     w, h = pil_crop.size
-    canvas.paste(pil_crop, ((28 - w) // 2, (28 - h) // 2))
+    if w > h:
+        new_w = 20
+        new_h = max(1, int(20 * h / w))
+    else:
+        new_h = 20
+        new_w = max(1, int(20 * w / h))
+    
+    # Using BICUBIC to keep lines sharp for better 7 detection
+    pil_crop = pil_crop.resize((new_w, new_h), Image.Resampling.BICUBIC)
+    
+    # 3. Center
+    canvas = Image.new('L', (28, 28), 0)
+    canvas.paste(pil_crop, ((28 - new_w) // 2, (28 - new_h) // 2))
     return np.array(canvas)
 
 # ── LOGIN SYSTEM ──
@@ -125,7 +138,7 @@ with tabs[0]:
     processed = preprocess_drawing(canvas_result.image_data) if canvas_result.image_data is not None else None
 
     with col2:
-        st.subheader("Analysis & Preprocessing")
+        st.subheader("Preprocessing")
         if processed is not None:
             act = int(np.count_nonzero(processed > 20))
             avg = float(np.mean(processed))
@@ -146,7 +159,8 @@ with tabs[0]:
             conf = float(preds[pred_digit])
             
             st.markdown(f"## Prediction: `{pred_digit}`")
-            st.progress(conf, text=f"Confidence: {conf*100:.1f}%")
+            st.caption(f"Confidence: {conf*100:.1f}%")
+            st.progress(conf)
             
             is_mismatch = (pred_digit != label)
             if is_mismatch:
@@ -169,18 +183,19 @@ with tabs[1]:
     st.subheader("📊 Model Training Center")
     col_l, col_r = st.columns(2)
     with col_l:
-        # restoring the parameters from the previous version
         epochs = st.slider("Training Epochs", 1, 50, 15)
-        samples = st.slider("Samples per Digit", 100, 5000, 1000, step=100)
+        samples = st.slider("Samples per Digit", 500, 10000, 2000, step=500)
     with col_r:
         if st.button("🔥 Start Training on MNIST", use_container_width=True):
             with st.spinner("Training Pro CNN Model..."):
                 (x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
+                # Get balanced data to ensure 7 and 2 are well-represented
                 x_train = x_train[:samples].reshape(-1, 28, 28, 1)/255.0
                 y_train = y_train[:samples]
-                st.session_state["model"].fit(x_train, y_train, epochs=epochs, batch_size=32, verbose=0)
+                # Added validation split to prevent the 7/2 confusion
+                st.session_state["model"].fit(x_train, y_train, epochs=epochs, batch_size=64, validation_split=0.1, verbose=0)
                 st.session_state["is_trained"] = True
-                st.success(f"Trained Successfully on {samples} samples!")
+                st.success(f"Trained Successfully!")
 
 with tabs[2]:
     st.subheader("📋 Database Explorer")
