@@ -32,45 +32,33 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── SESSION STATE ──
-MODEL_VERSION = "CNN_PRO_V1.3"
-if "model" not in st.session_state or st.session_state.get("m_ver") != MODEL_VERSION:
+if "model" not in st.session_state:
     model = models.Sequential([
         layers.Input(shape=(28, 28, 1)),
-        layers.Conv2D(32, (3, 3), activation='relu', padding='same'),
+        layers.Conv2D(32, (3, 3), activation='relu'),
         layers.MaxPooling2D((2, 2)),
-        layers.Conv2D(64, (3, 3), activation='relu', padding='same'),
-        layers.MaxPooling2D((2, 2)),
+        layers.Conv2D(64, (3, 3), activation='relu'),
         layers.Flatten(),
         layers.Dense(128, activation='relu'),
-        layers.Dropout(0.3),
+        layers.Dropout(0.2),
         layers.Dense(10, activation='softmax')
     ])
     model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
     st.session_state["model"] = model
-    st.session_state["m_ver"] = MODEL_VERSION
+    st.session_state["is_trained"] = False
+
 if "canvas_key" not in st.session_state: st.session_state["canvas_key"] = 0
 
-# ── CACHED GOOGLE SHEETS FUNCTIONS (Avoids 429 Error) ──
+# ── GOOGLE SHEETS FUNCTIONS (With Caching for Quota Protection) ──
 @st.cache_resource
 def get_sheets_client():
-    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     try:
         if "gcp_service_account" in st.secrets:
             info = st.secrets["gcp_service_account"]
             if isinstance(info, str): info = json.loads(info)
-            creds = Credentials.from_service_account_info(info, scopes=scopes)
+            creds = Credentials.from_service_account_info(info, scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
             return gspread.authorize(creds)
     except: return None
-
-@st.cache_data(ttl=300)
-def check_sheet_connection(url, name):
-    client = get_sheets_client()
-    if not client: return False, "No Credentials"
-    try:
-        sh = client.open_by_url(url) if "http" in url else client.open_by_key(url)
-        sh.worksheet(name)
-        return True, "Connected"
-    except Exception as e: return False, str(e)
 
 @st.cache_data(ttl=60)
 def fetch_sheet_data(url, name):
@@ -78,11 +66,10 @@ def fetch_sheet_data(url, name):
     if not client: return None
     try:
         sh = client.open_by_url(url) if "http" in url else client.open_by_key(url)
-        wks = sh.worksheet(name)
-        return wks.get_all_values()
+        return sh.worksheet(name).get_all_values()
     except: return None
 
-# ── PREPROCESSING (Centered) ──
+# ── PREPROCESSING (Centered Logic) ──
 def preprocess_drawing(image_data):
     gray = np.max(image_data[:, :, :3], axis=2).astype(np.uint8)
     if np.max(gray) < 25: return None
@@ -101,17 +88,16 @@ st.sidebar.title("📡 System Status")
 spreadsheet_url = st.sidebar.text_input("Spreadsheet URL", value=st.secrets.get("SPREADSHEET_ID", ""))
 sheet_name = st.sidebar.text_input("Sheet Name", value="Digits Data")
 
-conn_ok, conn_msg = check_sheet_connection(spreadsheet_url, sheet_name)
-if conn_ok:
-    st.sidebar.markdown(f"Status: <span class='status-online'>● Online</span>", unsafe_allow_html=True)
-else:
-    st.sidebar.markdown(f"Status: <span class='status-offline'>○ Offline</span>", unsafe_allow_html=True)
+client = get_sheets_client()
+if client: st.sidebar.markdown("Status: <span class='status-online'>● API Connected</span>", unsafe_allow_html=True)
+else: st.sidebar.markdown("Status: <span class='status-offline'>○ Offline</span>", unsafe_allow_html=True)
 
-# ── MAIN DASHBOARD ──
-tab1, tab2 = st.tabs(["✏️ Sandbox", "📋 Live Data"])
+# ── TABS ──
+tab_sandbox, tab_train, tab_db = st.tabs(["✏️ Digit Sandbox", "📊 Neural Network Studio", "📋 Database Explorer"])
 
-with tab1:
+with tab_sandbox:
     col1, col2, col3 = st.columns([2, 1.5, 1.5])
+    
     with col1:
         st.subheader("Canvas")
         canvas_result = st_canvas(
@@ -124,14 +110,18 @@ with tab1:
     processed = preprocess_drawing(canvas_result.image_data) if canvas_result.image_data is not None else None
 
     with col2:
-        st.subheader("Analytics")
+        st.subheader("Analytics & Preprocessing")
         if processed is not None:
+            # Metrics
             act = int(np.count_nonzero(processed > 20))
             avg = float(np.mean(processed))
             st.markdown(f"<div class='metric-card'><small>Active Pixels</small><div class='value'>{act}</div></div>", unsafe_allow_html=True)
             st.markdown(f"<div class='metric-card'><small>Mean Intensity</small><div class='value'>{avg:.1f}</div></div>", unsafe_allow_html=True)
-            st.image(processed, width=200, caption="Centered CNN Input")
-        else: st.info("Draw something...")
+            
+            # PREPROCESSING VIEW
+            st.markdown("**How the Model sees your Digit:**")
+            st.image(processed, width=220, caption="28x28 Grayscale Centered")
+        else: st.info("Waiting for drawing on the left...")
 
     with col3:
         st.subheader("Prediction")
@@ -145,47 +135,63 @@ with tab1:
             conf = float(preds[pred_digit])
             
             st.markdown(f"## Prediction: `{pred_digit}`")
-            st.progress(conf)
+            st.progress(conf, text=f"Confidence: {conf*100:.1f}%")
             
-            # Identify Mismatch
-            is_mismatch = pred_digit != label
-            
+            is_mismatch = (pred_digit != label)
             if is_mismatch:
                 st.markdown(f"<div class='banner-warn'>⚠️ Warning: Mismatch detected! Prediction ({pred_digit}) != Label ({label})</div>", unsafe_allow_html=True)
 
             if st.button("🚀 Push to Cloud", use_container_width=True):
-                client = get_sheets_client()
-                if client and conn_ok:
+                if client:
                     try:
                         sh = client.open_by_url(spreadsheet_url) if "http" in spreadsheet_url else client.open_by_key(spreadsheet_url)
                         wks = sh.worksheet(sheet_name)
                         
-                        # Set mismatch string for the Google Sheet
-                        mismatch_val = "TRUE" if is_mismatch else "FALSE"
-                        
-                        # Prepare Row
-                        row = [
-                            int(len(wks.get_all_values())), # ID
-                            str(op),                       # Username
-                            int(label),                    # Assigned Label
-                            datetime.now().strftime("%Y-%m-%d %H:%M:%S"), # Timestamp
-                            mismatch_val                   # is_mismatch column
-                        ] + [int(p) for p in processed.flatten()]
+                        mismatch_text = "TRUE" if is_mismatch else "FALSE"
+                        row = [int(len(wks.get_all_values())), op, int(label), datetime.now().strftime("%H:%M:%S"), mismatch_text] + [int(p) for p in processed.flatten()]
                         
                         wks.append_row(row)
-                        fetch_sheet_data.clear() # Refresh table view
-                        st.toast("Saved to Sheet!", icon="✅")
+                        fetch_sheet_data.clear() # Clear cache to refresh the table
+                        st.toast("Saved Successfully!", icon="✅")
                         st.session_state.canvas_key += 1; st.rerun()
                     except Exception as e: st.error(f"Error: {e}")
 
-with tab2:
-    st.subheader("Database Table")
-    if st.button("🔄 Refresh Table"):
+with tab_train:
+    st.subheader("📊 Model Training Center")
+    st.write("If the model is making mistakes, use this section to train it on the standard MNIST dataset.")
+    
+    col_t1, col_t2 = st.columns(2)
+    with col_t1:
+        st.write("**Training Parameters**")
+        epochs = st.slider("Epochs", 1, 10, 5)
+        samples = st.slider("Samples to use", 1000, 10000, 2000, step=1000)
+    
+    with col_t2:
+        st.write("**Actions**")
+        if st.button("🔥 Start Training Model", use_container_width=True):
+            with st.spinner(f"Loading MNIST data and training for {epochs} epochs..."):
+                (x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
+                x_train = x_train[:samples].reshape(-1, 28, 28, 1) / 255.0
+                y_train = y_train[:samples]
+                
+                st.session_state["model"].fit(x_train, y_train, epochs=epochs, batch_size=32, verbose=0)
+                st.session_state["is_trained"] = True
+                st.success("Training Complete! Accuracy has been improved.")
+    
+    st.divider()
+    if st.session_state["is_trained"]:
+        st.success("🧠 Current Status: Model has been custom trained.")
+    else:
+        st.warning("🧠 Current Status: Model is using default (untrained) weights.")
+
+with tab_db:
+    st.subheader("📋 Cloud Data Explorer")
+    if st.button("🔄 Refresh Data Table"):
         fetch_sheet_data.clear(); st.rerun()
 
-    raw_rows = fetch_sheet_data(spreadsheet_url, sheet_name)
-    if raw_rows and len(raw_rows) > 1:
-        df = pd.DataFrame(raw_rows[1:], columns=raw_rows[0])
-        # Show first 5 columns and color-code the mismatch column
-        st.dataframe(df.iloc[:, :5].tail(15), use_container_width=True)
-    else: st.info("Database is empty or offline.")
+    raw_data = fetch_sheet_data(spreadsheet_url, sheet_name)
+    if raw_data and len(raw_data) > 1:
+        df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
+        st.dataframe(df.iloc[:, :5].tail(20), use_container_width=True) # Show Metadata columns
+    else:
+        st.info("No data entries found in the Google Sheet.")
