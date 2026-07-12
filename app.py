@@ -10,10 +10,10 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime
 import json
 
-# ── PAGE CONFIGURATION ──
+# ── PAGE CONFIGURATION ────────────────────────────────────────────────────────
 st.set_page_config(page_title="MNIST CNN Pro Studio", page_icon="🧠", layout="wide")
 
-# ── CUSTOM CSS ──
+# ── CUSTOM CSS ────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
     .stApp { background-color: #0b0f19; color: #f1f5f9; }
@@ -35,20 +35,25 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ── SESSION STATE ──
-if "model" not in st.session_state:
+# ── SESSION STATE (PRO MODEL ARCHITECTURE) ──
+MODEL_VERSION = "CNN_PRO_V1.5"
+if "model" not in st.session_state or st.session_state.get("m_ver") != MODEL_VERSION:
+    # restoring the "Pro" model architecture provided previously
     model = models.Sequential([
         layers.Input(shape=(28, 28, 1)),
-        layers.Conv2D(32, (3, 3), activation='relu'),
+        layers.Conv2D(32, (3, 3), activation='relu', padding='same'),
         layers.MaxPooling2D((2, 2)),
-        layers.Conv2D(64, (3, 3), activation='relu'),
+        layers.Conv2D(64, (3, 3), activation='relu', padding='same'),
+        layers.MaxPooling2D((2, 2)),
+        layers.Conv2D(128, (3, 3), activation='relu'),
         layers.Flatten(),
-        layers.Dense(128, activation='relu'),
-        layers.Dropout(0.2),
+        layers.Dense(256, activation='relu'),
+        layers.Dropout(0.4),
         layers.Dense(10, activation='softmax')
     ])
     model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
     st.session_state["model"] = model
+    st.session_state["m_ver"] = MODEL_VERSION
     st.session_state["is_trained"] = False
 
 if "canvas_key" not in st.session_state: st.session_state["canvas_key"] = 0
@@ -62,9 +67,7 @@ def get_sheets_client():
             if isinstance(info, str): info = json.loads(info)
             creds = Credentials.from_service_account_info(info, scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
             return gspread.authorize(creds)
-    except:
-        return None
-    return None
+    except: return None
 
 @st.cache_data(ttl=60)
 def fetch_sheet_data(url, name):
@@ -73,8 +76,7 @@ def fetch_sheet_data(url, name):
     try:
         sh = client.open_by_url(url) if "http" in url else client.open_by_key(url)
         return sh.worksheet(name).get_all_values()
-    except:
-        return None
+    except: return None
 
 # ── PREPROCESSING ──
 def preprocess_drawing(image_data):
@@ -107,7 +109,7 @@ client = get_sheets_client()
 if client: st.sidebar.markdown("Status: <span class='status-online'>● Online</span>", unsafe_allow_html=True)
 else: st.sidebar.markdown("Status: <span class='status-offline'>○ Offline</span>", unsafe_allow_html=True)
 
-tabs = st.tabs(["✏️ Sandbox", "📊 Training", "📋 Database"])
+tabs = st.tabs(["✏️ Sandbox", "📊 Neural Network Studio", "📋 Database Explorer"])
 
 with tabs[0]:
     col1, col2, col3 = st.columns([2, 1.5, 1.5])
@@ -123,7 +125,7 @@ with tabs[0]:
     processed = preprocess_drawing(canvas_result.image_data) if canvas_result.image_data is not None else None
 
     with col2:
-        st.subheader("Analysis")
+        st.subheader("Analysis & Preprocessing")
         if processed is not None:
             act = int(np.count_nonzero(processed > 20))
             avg = float(np.mean(processed))
@@ -135,7 +137,7 @@ with tabs[0]:
     with col3:
         st.subheader("Prediction")
         st.write(f"Operator: **{op_name}**")
-        label = st.selectbox("Assign Label", list(range(10)))
+        label = st.selectbox("Assign True Label", list(range(10)))
         
         if processed is not None:
             inp = processed.reshape(1, 28, 28, 1).astype("float32") / 255.0
@@ -156,24 +158,29 @@ with tabs[0]:
                         sh = client.open_by_url(spreadsheet_url) if "http" in spreadsheet_url else client.open_by_key(spreadsheet_url)
                         wks = sh.worksheet(sheet_name)
                         mismatch_text = "TRUE" if is_mismatch else "FALSE"
-                        row = [int(len(wks.get_all_values())), op_name, int(label), datetime.now().strftime("%H:%M:%S"), mismatch_text] + [int(p) for p in processed.flatten()]
+                        row = [int(len(wks.get_all_values())), op_name, int(label), datetime.now().strftime("%Y-%m-%d %H:%M:%S"), mismatch_text] + [int(p) for p in processed.flatten()]
                         wks.append_row(row)
                         fetch_sheet_data.clear() 
                         st.toast("Data Saved!", icon="✅")
                         st.session_state.canvas_key += 1; st.rerun()
-                    except Exception as e:
-                        st.error(f"Sync error: {e}")
-                else:
-                    st.error("Google Sheets offline.")
+                    except Exception as e: st.error(f"Sync error: {e}")
 
 with tabs[1]:
-    st.subheader("📊 Model Training")
-    if st.button("🔥 Start Training on MNIST", use_container_width=True):
-        with st.spinner("Training..."):
-            (x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
-            st.session_state["model"].fit(x_train[:2000].reshape(-1, 28, 28, 1)/255.0, y_train[:2000], epochs=5, verbose=0)
-            st.session_state["is_trained"] = True
-            st.success("Trained Successfully!")
+    st.subheader("📊 Model Training Center")
+    col_l, col_r = st.columns(2)
+    with col_l:
+        # restoring the parameters from the previous version
+        epochs = st.slider("Training Epochs", 1, 50, 15)
+        samples = st.slider("Samples per Digit", 100, 5000, 1000, step=100)
+    with col_r:
+        if st.button("🔥 Start Training on MNIST", use_container_width=True):
+            with st.spinner("Training Pro CNN Model..."):
+                (x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
+                x_train = x_train[:samples].reshape(-1, 28, 28, 1)/255.0
+                y_train = y_train[:samples]
+                st.session_state["model"].fit(x_train, y_train, epochs=epochs, batch_size=32, verbose=0)
+                st.session_state["is_trained"] = True
+                st.success(f"Trained Successfully on {samples} samples!")
 
 with tabs[2]:
     st.subheader("📋 Database Explorer")
