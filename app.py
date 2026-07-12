@@ -16,7 +16,7 @@ import os
 # ── PAGE CONFIGURATION ────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="MNIST Neural Network Studio & Collector",
-    page_icon="🧠",
+    page_icon="✏️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
