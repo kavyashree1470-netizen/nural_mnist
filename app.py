@@ -29,12 +29,13 @@ st.markdown("""
         padding: 14px; color: #fef3c7; margin: 10px 0; border-left: 5px solid #f59e0b;
     }
     .lock-screen {
-        text-align: center; padding: 50px; background: #131a2e; border-radius: 20px; border: 2px dashed #a855f7;
+        text-align: center; padding: 40px; background: #131a2e; 
+        border-radius: 20px; border: 2px dashed #a855f7; margin-top: 20px;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# ── SESSION STATE ──
+# ── SESSION STATE INITIALIZATION ──
 if "model" not in st.session_state:
     model = models.Sequential([
         layers.Input(shape=(28, 28, 1)),
@@ -52,7 +53,7 @@ if "model" not in st.session_state:
 
 if "canvas_key" not in st.session_state: st.session_state["canvas_key"] = 0
 
-# ── GOOGLE SHEETS FUNCTIONS ──
+# ── GOOGLE SHEETS HELPER FUNCTIONS ──
 @st.cache_resource
 def get_sheets_client():
     try:
@@ -72,7 +73,7 @@ def fetch_sheet_data(url, name):
         return sh.worksheet(name).get_all_values()
     except: return None
 
-# ── PREPROCESSING ──
+# ── PREPROCESSING LOGIC ──
 def preprocess_drawing(image_data):
     gray = np.max(image_data[:, :, :3], axis=2).astype(np.uint8)
     if np.max(gray) < 25: return None
@@ -86,38 +87,26 @@ def preprocess_drawing(image_data):
     canvas.paste(pil_crop, ((28 - w) // 2, (28 - h) // 2))
     return np.array(canvas)
 
-# ── MAIN UI ──
+# ── OPERATOR GATEKEEPER ──
 st.title("🧠 MNIST CNN Pro Studio")
-
-# STEP 1: OPERATOR LOGIN
-st.markdown("### 👤 Operator Authentication")
-op_name = st.text_input("Enter your name to unlock the system", placeholder="Operator Name Required...")
+op_name = st.text_input("Enter Operator Name to Unlock System", placeholder="Type name here...")
 
 if not op_name:
-    st.markdown("""
-    <div class="lock-screen">
-        <h2 style="color: #a855f7;">🔒 System Locked</h2>
-        <p>Please enter the <b>Operator Name</b> above to access the Sandbox, Training Center, and Cloud Database.</p>
-    </div>
-    """, unsafe_allow_html=True)
-    st.stop() # Stops the script here until name is entered
+    st.markdown('<div class="lock-screen"><h2 style="color: #a855f7;">🔒 System Locked</h2><p>Authentication Required: Please enter your name to access the Sandbox and Tools.</p></div>', unsafe_allow_html=True)
+    st.stop()
 
-# STEP 2: APP UNLOCKED
-st.success(f"Welcome, {op_name}. System Unlocked.")
-
-# Sidebar Configuration
+# ── SYSTEM UNLOCKED: CONTENT BELOW ──
 st.sidebar.title("📡 System Status")
 spreadsheet_url = st.sidebar.text_input("Spreadsheet URL", value=st.secrets.get("SPREADSHEET_ID", ""))
 sheet_name = st.sidebar.text_input("Sheet Name", value="Digits Data")
 
 client = get_sheets_client()
-if client: st.sidebar.markdown("Status: <span class='status-online'>● Connected</span>", unsafe_allow_html=True)
+if client: st.sidebar.markdown("Status: <span class='status-online'>● Online</span>", unsafe_allow_html=True)
 else: st.sidebar.markdown("Status: <span class='status-offline'>○ Offline</span>", unsafe_allow_html=True)
 
-# Main Tabs
-tab_sandbox, tab_train, tab_db = st.tabs(["✏️ Digit Sandbox", "📊 Neural Network Studio", "📋 Database Explorer"])
+tabs = st.tabs(["✏️ Sandbox", "📊 Training Studio", "📋 Data Explorer"])
 
-with tab_sandbox:
+with tabs[0]: # Sandbox
     col1, col2, col3 = st.columns([2, 1.5, 1.5])
     
     with col1:
@@ -132,8 +121,35 @@ with tab_sandbox:
     processed = preprocess_drawing(canvas_result.image_data) if canvas_result.image_data is not None else None
 
     with col2:
-        st.subheader("Analytics & Preprocessing")
+        st.subheader("Preprocessing")
         if processed is not None:
             act = int(np.count_nonzero(processed > 20))
             avg = float(np.mean(processed))
-            st.markdown(f"<div class
+            st.markdown(f'<div class="metric-card"><small>Active Pixels</small><div class="value">{act}</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="metric-card"><small>Mean Intensity</small><div class="value">{avg:.1f}</div></div>', unsafe_allow_html=True)
+            st.image(processed, width=220, caption="CNN Input (28x28 Centered)")
+        else: st.info("Waiting for drawing...")
+
+    with col3:
+        st.subheader("Prediction")
+        st.write(f"Logged in as: **{op_name}**")
+        label = st.selectbox("Assign True Label", list(range(10)))
+        
+        if processed is not None:
+            inp = processed.reshape(1, 28, 28, 1).astype("float32") / 255.0
+            preds = st.session_state["model"].predict(inp, verbose=0)[0]
+            pred_digit = int(np.argmax(preds))
+            conf = float(preds[pred_digit])
+            
+            st.markdown(f"## Prediction: `{pred_digit}`")
+            st.progress(conf, text=f"Confidence: {conf*100:.1f}%")
+            
+            is_mismatch = (pred_digit != label)
+            if is_mismatch:
+                st.markdown(f'<div class="banner-warn">⚠️ Mismatch: Prediction ({pred_digit}) != Label ({label})</div>', unsafe_allow_html=True)
+
+            if st.button("🚀 Push to Cloud", use_container_width=True):
+                if client:
+                    try:
+                        sh = client.open_by_url(spreadsheet_url) if "http" in spreadsheet_url else client.open_by_key(spreadsheet_url)
+                        wks = sh.worksheet(sheet_name)
