@@ -6,37 +6,20 @@ from tensorflow.keras import layers, models
 import plotly.express as px
 import plotly.graph_objects as go
 from streamlit_drawable_canvas import st_canvas
-from PIL import Image, ImageOps
-import gspread
-from google.oauth2.service_account import Credentials
-from datetime import datetime
+from PIL import Image
 import json
-import os
 
-# ── PAGE CONFIGURATION ────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="MNIST CNN Studio",
-    page_icon="🧠",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# ── PAGE CONFIG ──
+st.set_page_config(page_title="MNIST CNN Studio", layout="wide")
 
-# ── CUSTOM STYLING ────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
     .stApp { background-color: #0b0f19; color: #f1f5f9; }
-    .main-header { color: #a855f7; font-weight: 800; margin-bottom: 5px; }
     .metric-card {
         background: #131a2e; border: 1px solid #1e293b; border-radius: 12px;
-        padding: 15px; text-align: center; margin-bottom: 10px;
+        padding: 15px; text-align: center;
     }
     .metric-value { font-size: 1.8rem; font-weight: 800; color: #2dd4bf; }
-    .metric-label { font-size: 0.8rem; color: #94a3b8; text-transform: uppercase; }
-    .mnist-grid {
-        display: grid; grid-template-columns: repeat(28, 8px);
-        gap: 0; border: 2px solid #334155; width: fit-content; margin: 0 auto;
-    }
-    .mnist-cell { width: 8px; height: 8px; }
     .banner-warn {
         background: #451a03; border: 1px solid #f59e0b; border-radius: 10px;
         padding: 14px; color: #fef3c7; margin: 10px 0;
@@ -44,111 +27,65 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ── SESSION STATE INITIALIZATION ──────────────────────────────────────────────
+# ── MODEL BUILDING (CNN) ──
 def build_cnn_model():
     model = models.Sequential([
         layers.Input(shape=(28, 28, 1)),
         layers.Conv2D(32, (3, 3), activation='relu'),
         layers.MaxPooling2D((2, 2)),
         layers.Conv2D(64, (3, 3), activation='relu'),
-        layers.MaxPooling2D((2, 2)),
         layers.Flatten(),
         layers.Dense(128, activation='relu'),
-        layers.Dropout(0.3), # Prevent overfitting as requested
-        layers.Dense(64, activation='relu'),
+        layers.Dropout(0.2), # Req 3: Dropout added
         layers.Dense(10, activation='softmax')
     ])
     model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
     return model
 
-if "model" not in st.session_state:
+# Initialize or Re-initialize if shape is wrong
+if "model" not in st.session_state or st.session_state.get("model_type") != "CNN_V2":
     st.session_state["model"] = build_cnn_model()
+    st.session_state["model_type"] = "CNN_V2"
     st.session_state["is_trained"] = False
-if "history" not in st.session_state: st.session_state["history"] = None
+
 if "canvas_key" not in st.session_state: st.session_state["canvas_key"] = 0
 
-# ── GOOGLE SHEETS UTILS ───────────────────────────────────────────────────────
-def get_sheets_client():
-    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-    if "gcp_service_account" in st.secrets:
-        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
-        return gspread.authorize(creds)
-    return None
-
-# ── PREPROCESSING & ANALYTICS ─────────────────────────────────────────────────
+# ── PREPROCESSING (Req 2: Centering) ──
 def preprocess_drawing(image_data):
-    """Crops and centers the drawing into a 28x28 grayscale image."""
+    # Convert RGBA to Grayscale
     gray = np.max(image_data[:, :, :3], axis=2).astype(np.uint8)
     if np.max(gray) < 20: return None
     
-    # Bounding Box Extraction
+    # Find bounding box to center the digit
     coords = np.argwhere(gray > 20)
     y_min, x_min = coords.min(axis=0)
     y_max, x_max = coords.max(axis=0)
+    
+    # Crop and Resize to 20x20 (standard MNIST practice before padding)
     cropped = gray[y_min:y_max+1, x_min:x_max+1]
-    
-    # Resize with aspect ratio
     pil_img = Image.fromarray(cropped, 'L')
-    w, h = pil_img.size
-    if w > h:
-        new_w = 20
-        new_h = int(20 * (h / w))
-    else:
-        new_h = 20
-        new_w = int(20 * (w / h))
+    pil_img = pil_img.resize((20, 20), Image.Resampling.LANCZOS)
     
-    pil_img = pil_img.resize((max(1, new_w), max(1, new_h)), Image.Resampling.LANCZOS)
-    
-    # Center in 28x28
+    # Pad to 28x28 (Centering)
     canvas = Image.new('L', (28, 28), 0)
-    canvas.paste(pil_img, ((28 - new_w)//2, (28 - new_h)//2))
+    canvas.paste(pil_img, (4, 4)) 
     return np.array(canvas)
 
-def get_pixel_metrics(arr_28x28):
-    active_pixels = np.count_nonzero(arr_28x28 > 30)
-    mean_val = np.mean(arr_28x28)
-    return active_pixels, mean_val
+# ── MAIN UI ──
+st.title("🧠 MNIST CNN Studio")
 
-# ── DATA LOADING ──────────────────────────────────────────────────────────────
-@st.cache_data
-def load_mnist_data(samples_per_digit=100):
-    try:
-        (x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
-        x_train = x_train.reshape(-1, 28, 28, 1).astype("float32") / 255.0
-        x_test = x_test.reshape(-1, 28, 28, 1).astype("float32") / 255.0
-        
-        # Balance dataset
-        idx = np.concatenate([np.where(y_train == i)[0][:samples_per_digit] for i in range(10)])
-        return x_train[idx], y_train[idx], x_test[:200], y_test[:200]
-    except:
-        # Emergency dummy data if download fails
-        return np.random.rand(100, 28, 28, 1), np.random.randint(0, 10, 100), np.random.rand(20, 28, 28, 1), np.random.randint(0, 10, 20)
-
-# ── SIDEBAR ───────────────────────────────────────────────────────────────────
-st.sidebar.title("⚙️ CNN Settings")
-epochs = st.sidebar.slider("Epochs", 5, 50, 10)
-lr = st.sidebar.select_slider("Learning Rate", [0.01, 0.001, 0.0001], value=0.001)
-
-if st.sidebar.button("🗑️ Reset Model Weights"):
-    st.session_state["model"] = build_cnn_model()
-    st.session_state["is_trained"] = False
-    st.rerun()
-
-# ── MAIN UI ───────────────────────────────────────────────────────────────────
-st.markdown("<h1 class='main-header'>🧠 MNIST CNN Studio</h1>", unsafe_allow_html=True)
-
-tab1, tab2 = st.tabs(["✏️ Sandbox & Inference", "📊 Training Studio"])
+tab1, tab2 = st.tabs(["✏️ Sandbox", "📊 Training"])
 
 with tab1:
-    col1, col2, col3 = st.columns([2, 1.5, 1.5])
+    col1, col2, col3 = st.columns([2, 1, 1.5])
     
     with col1:
         st.subheader("Draw Digit")
         canvas_res = st_canvas(
-            stroke_width=18, stroke_color="#FFF", background_color="#000",
+            stroke_width=20, stroke_color="#FFF", background_color="#000",
             height=280, width=280, drawing_mode="freedraw", key=f"canv_{st.session_state.canvas_key}"
         )
-        if st.button("Clear Canvas"):
+        if st.button("Clear"):
             st.session_state.canvas_key += 1
             st.rerun()
 
@@ -157,66 +94,61 @@ with tab1:
         processed_img = preprocess_drawing(canvas_res.image_data)
 
     with col2:
-        st.subheader("CNN Input View")
+        st.subheader("Metrics")
         if processed_img is not None:
-            # Display metrics (Req 1)
-            active, mean = get_pixel_metrics(processed_img)
-            c_a, c_b = st.columns(2)
-            c_a.markdown(f"<div class='metric-card'><div class='metric-label'>Active Pixels</div><div class='metric-value'>{active}</div></div>", unsafe_allow_html=True)
-            c_b.markdown(f"<div class='metric-card'><div class='metric-label'>Mean Pixel</div><div class='metric-value'>{mean:.1f}</div></div>", unsafe_allow_html=True)
+            # Req 1: Active and Mean Pixel
+            active_px = np.count_nonzero(processed_img > 30)
+            mean_px = np.mean(processed_img)
             
-            # HTML Preview
-            cells = "".join([f'<div class="mnist-cell" style="background:rgb({v},{v//2},{v})"></div>' for v in processed_img.flatten()])
-            st.markdown(f'<div class="mnist-grid">{cells}</div>', unsafe_allow_html=True)
+            st.markdown(f"<div class='metric-card'><small>ACTIVE PIXELS</small><div class='metric-value'>{active_px}</div></div>", unsafe_allow_html=True)
+            st.write("")
+            st.markdown(f"<div class='metric-card'><small>MEAN PIXEL</small><div class='metric-value'>{mean_px:.1f}</div></div>", unsafe_allow_html=True)
+            
+            # Show small preview
+            st.image(processed_img, width=150, caption="CNN Input")
         else:
-            st.info("Waiting for drawing...")
+            st.info("Draw something!")
 
     with col3:
         st.subheader("Prediction")
-        assigned_label = st.selectbox("Your Label", list(range(10)))
+        assigned_label = st.selectbox("Assign Label", list(range(10)))
         
         if processed_img is not None:
-            # Inference
-            inp = processed_img.reshape(1, 28, 28, 1) / 255.0
-            pred_probs = st.session_state["model"].predict(inp, verbose=0)
-            pred_digit = np.argmax(pred_probs)
-            conf = np.max(pred_probs)
+            # Inference - Reshape to (1, 28, 28, 1) for CNN
+            inp = processed_img.reshape(1, 28, 28, 1).astype("float32") / 255.0
             
-            st.markdown(f"## Prediction: <span style='color:#a855f7'>{pred_digit}</span>", unsafe_allow_html=True)
-            st.progress(float(conf))
-            
-            # Warning logic (Req 5)
-            if pred_digit != assigned_label:
-                st.markdown(f"""
-                <div class='banner-warn'>
-                    ⚠️ <b>Label Mismatch:</b> You marked this as <b>{assigned_label}</b>, 
-                    but the CNN predicts <b>{pred_digit}</b> ({conf*100:.1f}% confidence).
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.success("✅ Prediction matches your label!")
+            # Robust prediction call
+            try:
+                preds = st.session_state["model"].predict(inp, verbose=0)
+                pred_digit = np.argmax(preds)
+                conf = np.max(preds)
+                
+                st.markdown(f"## Digit: `{pred_digit}`")
+                st.caption(f"Confidence: {conf*100:.1f}%")
+                
+                # Req 5: Warning if Label != Prediction
+                if pred_digit != assigned_label:
+                    st.markdown(f"""
+                    <div class='banner-warn'>
+                        ⚠️ <b>Warning:</b> You assigned <b>{assigned_label}</b>, 
+                        but the CNN predicts <b>{pred_digit}</b>.
+                    </div>
+                    """, unsafe_allow_html=True)
+            except Exception as e:
+                st.error("Model error. Please click 'Hard Reset' in the Training tab.")
 
 with tab2:
-    st.subheader("Model Training")
-    if st.button("🚀 Start CNN Training"):
-        with st.spinner("Loading MNIST..."):
-            xt, yt, xv, yv = load_mnist_data()
+    if st.button("🚀 Train CNN Model (Quick)"):
+        with st.spinner("Training on MNIST..."):
+            (x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
+            x_train = x_train[:2000].reshape(-1, 28, 28, 1) / 255.0
+            y_train = y_train[:2000]
             
-            # Re-compile with chosen LR
-            st.session_state["model"].optimizer.learning_rate.assign(lr)
-            
-            history = st.session_state["model"].fit(
-                xt, yt, validation_data=(xv, yv),
-                epochs=epochs, batch_size=32, verbose=0
-            )
-            st.session_state["history"] = history.history
+            st.session_state["model"].fit(x_train, y_train, epochs=5, batch_size=32, verbose=0)
             st.session_state["is_trained"] = True
-            st.success("Training Complete!")
-            
-    if st.session_state["history"]:
-        h = st.session_state["history"]
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(y=h['accuracy'], name='Train Accuracy'))
-        fig.add_trace(go.Scatter(y=h['val_accuracy'], name='Val Accuracy'))
-        fig.update_layout(template="plotly_dark", title="Accuracy Curve")
-        st.plotly_chart(fig, use_container_width=True)
+            st.success("Trained successfully!")
+
+    if st.button("🗑️ Hard Reset App State"):
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.rerun()
