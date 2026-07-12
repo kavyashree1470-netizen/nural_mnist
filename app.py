@@ -28,6 +28,9 @@ st.markdown("""
         background: #451a03; border: 1px solid #f59e0b; border-radius: 10px;
         padding: 14px; color: #fef3c7; margin: 10px 0; border-left: 5px solid #f59e0b;
     }
+    .lock-screen {
+        text-align: center; padding: 50px; background: #131a2e; border-radius: 20px; border: 2px dashed #a855f7;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -49,7 +52,7 @@ if "model" not in st.session_state:
 
 if "canvas_key" not in st.session_state: st.session_state["canvas_key"] = 0
 
-# ── GOOGLE SHEETS FUNCTIONS (With Caching for Quota Protection) ──
+# ── GOOGLE SHEETS FUNCTIONS ──
 @st.cache_resource
 def get_sheets_client():
     try:
@@ -69,7 +72,7 @@ def fetch_sheet_data(url, name):
         return sh.worksheet(name).get_all_values()
     except: return None
 
-# ── PREPROCESSING (Centered Logic) ──
+# ── PREPROCESSING ──
 def preprocess_drawing(image_data):
     gray = np.max(image_data[:, :, :3], axis=2).astype(np.uint8)
     if np.max(gray) < 25: return None
@@ -83,16 +86,35 @@ def preprocess_drawing(image_data):
     canvas.paste(pil_crop, ((28 - w) // 2, (28 - h) // 2))
     return np.array(canvas)
 
-# ── SIDEBAR ──
+# ── MAIN UI ──
+st.title("🧠 MNIST CNN Pro Studio")
+
+# STEP 1: OPERATOR LOGIN
+st.markdown("### 👤 Operator Authentication")
+op_name = st.text_input("Enter your name to unlock the system", placeholder="Operator Name Required...")
+
+if not op_name:
+    st.markdown("""
+    <div class="lock-screen">
+        <h2 style="color: #a855f7;">🔒 System Locked</h2>
+        <p>Please enter the <b>Operator Name</b> above to access the Sandbox, Training Center, and Cloud Database.</p>
+    </div>
+    """, unsafe_allow_html=True)
+    st.stop() # Stops the script here until name is entered
+
+# STEP 2: APP UNLOCKED
+st.success(f"Welcome, {op_name}. System Unlocked.")
+
+# Sidebar Configuration
 st.sidebar.title("📡 System Status")
 spreadsheet_url = st.sidebar.text_input("Spreadsheet URL", value=st.secrets.get("SPREADSHEET_ID", ""))
 sheet_name = st.sidebar.text_input("Sheet Name", value="Digits Data")
 
 client = get_sheets_client()
-if client: st.sidebar.markdown("Status: <span class='status-online'>● API Connected</span>", unsafe_allow_html=True)
+if client: st.sidebar.markdown("Status: <span class='status-online'>● Connected</span>", unsafe_allow_html=True)
 else: st.sidebar.markdown("Status: <span class='status-offline'>○ Offline</span>", unsafe_allow_html=True)
 
-# ── TABS ──
+# Main Tabs
 tab_sandbox, tab_train, tab_db = st.tabs(["✏️ Digit Sandbox", "📊 Neural Network Studio", "📋 Database Explorer"])
 
 with tab_sandbox:
@@ -112,86 +134,6 @@ with tab_sandbox:
     with col2:
         st.subheader("Analytics & Preprocessing")
         if processed is not None:
-            # Metrics
             act = int(np.count_nonzero(processed > 20))
             avg = float(np.mean(processed))
-            st.markdown(f"<div class='metric-card'><small>Active Pixels</small><div class='value'>{act}</div></div>", unsafe_allow_html=True)
-            st.markdown(f"<div class='metric-card'><small>Mean Intensity</small><div class='value'>{avg:.1f}</div></div>", unsafe_allow_html=True)
-            
-            # PREPROCESSING VIEW
-            st.markdown("**How the Model sees your Digit:**")
-            st.image(processed, width=220, caption="28x28 Grayscale Centered")
-        else: st.info("Waiting for drawing on the left...")
-
-    with col3:
-        st.subheader("Prediction")
-        op = st.text_input("Operator", value="User")
-        label = st.selectbox("True Label", list(range(10)))
-        
-        if processed is not None:
-            inp = processed.reshape(1, 28, 28, 1).astype("float32") / 255.0
-            preds = st.session_state["model"].predict(inp, verbose=0)[0]
-            pred_digit = int(np.argmax(preds))
-            conf = float(preds[pred_digit])
-            
-            st.markdown(f"## Prediction: `{pred_digit}`")
-            st.progress(conf, text=f"Confidence: {conf*100:.1f}%")
-            
-            is_mismatch = (pred_digit != label)
-            if is_mismatch:
-                st.markdown(f"<div class='banner-warn'>⚠️ Warning: Mismatch detected! Prediction ({pred_digit}) != Label ({label})</div>", unsafe_allow_html=True)
-
-            if st.button("🚀 Push to Cloud", use_container_width=True):
-                if client:
-                    try:
-                        sh = client.open_by_url(spreadsheet_url) if "http" in spreadsheet_url else client.open_by_key(spreadsheet_url)
-                        wks = sh.worksheet(sheet_name)
-                        
-                        mismatch_text = "TRUE" if is_mismatch else "FALSE"
-                        row = [int(len(wks.get_all_values())), op, int(label), datetime.now().strftime("%H:%M:%S"), mismatch_text] + [int(p) for p in processed.flatten()]
-                        
-                        wks.append_row(row)
-                        fetch_sheet_data.clear() # Clear cache to refresh the table
-                        st.toast("Saved Successfully!", icon="✅")
-                        st.session_state.canvas_key += 1; st.rerun()
-                    except Exception as e: st.error(f"Error: {e}")
-
-with tab_train:
-    st.subheader("📊 Model Training Center")
-    st.write("If the model is making mistakes, use this section to train it on the standard MNIST dataset.")
-    
-    col_t1, col_t2 = st.columns(2)
-    with col_t1:
-        st.write("**Training Parameters**")
-        epochs = st.slider("Epochs", 1, 10, 5)
-        samples = st.slider("Samples to use", 1000, 10000, 2000, step=1000)
-    
-    with col_t2:
-        st.write("**Actions**")
-        if st.button("🔥 Start Training Model", use_container_width=True):
-            with st.spinner(f"Loading MNIST data and training for {epochs} epochs..."):
-                (x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
-                x_train = x_train[:samples].reshape(-1, 28, 28, 1) / 255.0
-                y_train = y_train[:samples]
-                
-                st.session_state["model"].fit(x_train, y_train, epochs=epochs, batch_size=32, verbose=0)
-                st.session_state["is_trained"] = True
-                st.success("Training Complete! Accuracy has been improved.")
-    
-    st.divider()
-    if st.session_state["is_trained"]:
-        st.success("🧠 Current Status: Model has been custom trained.")
-    else:
-        st.warning("🧠 Current Status: Model is using default (untrained) weights.")
-
-with tab_db:
-    st.subheader("📋 Cloud Data Explorer")
-    if st.button("🔄 Refresh Data Table"):
-        fetch_sheet_data.clear(); st.rerun()
-
-    raw_data = fetch_sheet_data(spreadsheet_url, sheet_name)
-    if raw_data and len(raw_data) > 1:
-        df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
-        st.dataframe(df.iloc[:, :5].tail(20), use_container_width=True) # Show Metadata columns
-    else:
-        st.info("No data entries found in the Google Sheet.")
+            st.markdown(f"<div class
