@@ -13,7 +13,7 @@ import json
 # ── PAGE CONFIGURATION ────────────────────────────────────────────────────────
 st.set_page_config(page_title="MNIST CNN Pro Studio", page_icon="🧠", layout="wide")
 
-# ── CUSTOM CSS (Includes Playground Styles) ───────────────────────────────────
+# ── CUSTOM CSS ────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
     .stApp { background-color: #0b0f19; color: #f1f5f9; }
@@ -28,20 +28,19 @@ st.markdown("""
         background: #451a03; border: 1px solid #f59e0b; border-radius: 10px;
         padding: 14px; color: #fef3c7; margin: 10px 0; border-left: 5px solid #f59e0b;
     }
-    /* Playground Style Schematic */
-    .nn-layer {
-        background: #1e293b; border-left: 4px solid #a855f7;
-        padding: 10px; margin: 5px 0; border-radius: 4px; font-family: monospace;
-    }
     .lock-screen {
         text-align: center; padding: 40px; background: #131a2e; 
         border-radius: 20px; border: 2px dashed #a855f7; margin-top: 20px;
+    }
+    .svg-container {
+        background: white; border-radius: 15px; padding: 20px; 
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); text-align: center;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # ── SESSION STATE (PRO MODEL ARCHITECTURE) ──
-MODEL_VERSION = "CNN_PRO_V2.6_FIXED"
+MODEL_VERSION = "CNN_PRO_V2.7_VISUAL"
 if "model" not in st.session_state or st.session_state.get("m_ver") != MODEL_VERSION:
     model = models.Sequential([
         layers.Input(shape=(28, 28, 1)),
@@ -64,6 +63,48 @@ if "model" not in st.session_state or st.session_state.get("m_ver") != MODEL_VER
 
 if "canvas_key" not in st.session_state: st.session_state["canvas_key"] = 0
 
+# ── DYNAMIC NN GRAPH GENERATOR (SVG) ──
+def generate_nn_svg():
+    # Layer definitions: [node_count, color, label]
+    layers_def = [
+        [2, "#4a76c0", "Input Layer"],
+        [4, "#68a34d", "Hidden Layer"],
+        [4, "#68a34d", "Hidden Layer"],
+        [1, "#ffc107", "Output Layer"]
+    ]
+    
+    width = 500
+    height = 300
+    svg = f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg">'
+    
+    # Draw Connections (Lines)
+    for i in range(len(layers_def) - 1):
+        curr_layer = layers_def[i]
+        next_layer = layers_def[i+1]
+        
+        x1 = 50 + i * 130
+        x2 = 50 + (i + 1) * 130
+        
+        for c in range(curr_layer[0]):
+            y1 = (height / (curr_layer[0] + 1)) * (c + 1)
+            for n in range(next_layer[0]):
+                y2 = (height / (next_layer[0] + 1)) * (n + 1)
+                svg += f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="#333" stroke-width="1" />'
+                
+    # Draw Nodes (Circles)
+    for i, layer in enumerate(layers_def):
+        x = 50 + i * 130
+        # Text label above
+        svg += f'<text x="{x}" y="20" font-family="Arial" font-size="12" text-anchor="middle" fill="#333">{layer[2]}</text>'
+        
+        for n in range(layer[0]):
+            y = (height / (layer[0] + 1)) * (n + 1)
+            svg += f'<circle cx="{x}" cy="{y}" r="15" fill="{layer[1]}" stroke="white" stroke-width="2" />'
+            
+    svg += '<text x="250" y="290" font-family="Arial" font-size="14" text-anchor="middle" font-weight="bold" fill="#333">Artificial Neural Network Graph</text>'
+    svg += '</svg>'
+    return svg
+
 # ── GOOGLE SHEETS CORE ──
 @st.cache_resource
 def get_sheets_client():
@@ -84,7 +125,7 @@ def fetch_sheet_data(url, name):
         return sh.worksheet(name).get_all_values()
     except: return None
 
-# ── PREPROCESSING (Accurate for 7 vs 2) ──
+# ── PREPROCESSING (MNIST Accurate) ──
 def preprocess_drawing(image_data):
     gray = np.max(image_data[:, :, :3], axis=2).astype(np.uint8)
     if np.max(gray) < 30: return None
@@ -100,7 +141,7 @@ def preprocess_drawing(image_data):
 # ── AUTOMATED TRAINING LOGIC ──
 def perform_automated_training():
     if not st.session_state["is_trained"]:
-        with st.status("🚀 Neural Network Auto-Initializing...", expanded=False) as status:
+        with st.status("🚀 Initializing AI Layers...", expanded=False) as status:
             (x_train, y_train), _ = tf.keras.datasets.mnist.load_data()
             x_train = x_train[:8000].reshape(-1, 28, 28, 1) / 255.0
             y_train = y_train[:8000]
@@ -108,7 +149,7 @@ def perform_automated_training():
             st.session_state["train_history"]["acc"].extend(history.history['accuracy'])
             st.session_state["train_history"]["loss"].extend(history.history['loss'])
             st.session_state["is_trained"] = True
-            status.update(label="AI Trained & Ready!", state="complete")
+            status.update(label="Training Complete!", state="complete")
 
 def train_on_live_recording(spreadsheet_url, sheet_name):
     data = fetch_sheet_data(spreadsheet_url, sheet_name)
@@ -178,53 +219,37 @@ with tabs[0]:
                     wks = sh.worksheet(sheet_name)
                     row = [int(len(wks.get_all_values())), op_name, int(label), datetime.now().strftime("%H:%M:%S"), "NA"] + [int(p) for p in processed.flatten()]
                     wks.append_row(row)
-                    with st.spinner("Learning from recording..."):
+                    with st.spinner("Learning..."):
                         fetch_sheet_data.clear()
                         train_on_live_recording(spreadsheet_url, sheet_name)
                     st.toast("Updated AI model!"); st.session_state.canvas_key += 1; st.rerun()
 
 with tabs[1]:
-    st.subheader("📊 Neural Network Playground")
+    st.subheader("📊 Neural Network Studio")
     
-    col_arch, col_stats = st.columns([1, 1.2])
+    col_graph, col_metrics = st.columns([1, 1])
     
-    with col_arch:
-        st.markdown("#### Topology schematic")
-        # Custom CSS Architecture diagram (Playground style)
-        st.markdown("""
-        <div class="nn-layer">📥 <b>Input Layer</b>: 28x28 Grayscale</div>
-        <div style="text-align:center; color:#a855f7">⬇️</div>
-        <div class="nn-layer">🌀 <b>Conv2D</b>: 32 filters, ReLU</div>
-        <div style="text-align:center; color:#a855f7">⬇️</div>
-        <div class="nn-layer">📉 <b>MaxPool</b>: 2x2 spatial reduction</div>
-        <div style="text-align:center; color:#a855f7">⬇️</div>
-        <div class="nn-layer">🌀 <b>Conv2D</b>: 64 filters, ReLU</div>
-        <div style="text-align:center; color:#a855f7">⬇️</div>
-        <div class="nn-layer">⬛ <b>Flatten</b>: Matrix to Vector</div>
-        <div style="text-align:center; color:#a855f7">⬇️</div>
-        <div class="nn-layer">🧠 <b>Dense</b>: 128 Neurons (Hidden)</div>
-        <div style="text-align:center; color:#a855f7">⬇️</div>
-        <div class="nn-layer">📤 <b>Output</b>: Softmax (10 Digits)</div>
-        """, unsafe_allow_html=True)
+    with col_graph:
+        st.markdown('<div class="svg-container">', unsafe_allow_html=True)
+        st.write(generate_nn_svg(), unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
         
-    with col_stats:
-        st.markdown("#### Live Playground Metrics")
+        with st.expander("🔍 Architecture Inspector"):
+            summary = []
+            st.session_state["model"].summary(print_fn=lambda x: summary.append(x))
+            st.code("\n".join(summary))
+
+    with col_metrics:
+        st.markdown("#### Live Training Playground Metrics")
         if st.session_state["train_history"]["acc"]:
             metrics_df = pd.DataFrame({
-                "Accuracy (%)": [x * 100 for x in st.session_state["train_history"]["acc"]],
-                "Loss (Error)": st.session_state["train_history"]["loss"]
+                "Accuracy": st.session_state["train_history"]["acc"],
+                "Loss": st.session_state["train_history"]["loss"]
             })
-            st.line_chart(metrics_df, height=260)
-            c1, c2 = st.columns(2)
-            c1.metric("Current Accuracy", f"{st.session_state['train_history']['acc'][-1]:.1%}")
-            c2.metric("Loss Score", f"{st.session_state['train_history']['loss'][-1]:.4f}")
+            st.line_chart(metrics_df, height=220)
+            st.metric("Model Confidence (Acc)", f"{st.session_state['train_history']['acc'][-1]:.1%}")
         else:
-            st.info("Training data log will appear here.")
-
-    with st.expander("🔍 Deep Model Summary"):
-        summary = []
-        st.session_state["model"].summary(print_fn=lambda x: summary.append(x))
-        st.code("\n".join(summary))
+            st.info("Metrics will populate after training.")
 
 with tabs[2]:
     st.subheader("📋 Database Explorer")
