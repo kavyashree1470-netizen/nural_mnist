@@ -41,7 +41,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── SESSION STATE (PRO MODEL ARCHITECTURE) ──
-MODEL_VERSION = "CNN_PRO_V2.9_STABLE"
+MODEL_VERSION = "CNN_PRO_V3.0_FINAL"
 if "model" not in st.session_state or st.session_state.get("m_ver") != MODEL_VERSION:
     model = models.Sequential([
         layers.Input(shape=(28, 28, 1)),
@@ -63,6 +63,7 @@ if "model" not in st.session_state or st.session_state.get("m_ver") != MODEL_VER
     st.session_state["train_history"] = {"acc": [], "loss": []}
 
 if "canvas_key" not in st.session_state: st.session_state["canvas_key"] = 0
+if "predict_clicked" not in st.session_state: st.session_state["predict_clicked"] = False
 
 # ── DYNAMIC NN GRAPH GENERATOR (SVG) ──
 def generate_nn_svg():
@@ -150,7 +151,6 @@ def train_on_live_recording(spreadsheet_url, sheet_name):
 # ── LOGIN SYSTEM ──
 st.title("🧠 MNIST CNN Pro Studio")
 op_name = st.text_input("Operator Login", placeholder="Enter name...")
-
 if not op_name:
     st.markdown('<div class="lock-screen"><h2>🔒 System Locked</h2><p>Enter name to unlock.</p></div>', unsafe_allow_html=True)
     st.stop()
@@ -170,11 +170,23 @@ tabs = st.tabs(["✏️ Sandbox", "📊 Neural Network Studio", "📋 Database E
 
 with tabs[0]:
     col1, col2, col3 = st.columns([2, 1.5, 1.5])
+    
     with col1:
         st.subheader("Canvas")
-        canvas_result = st_canvas(stroke_width=22, stroke_color="#FFF", background_color="#000", height=300, width=300, key=f"c_{st.session_state.canvas_key}")
-        if st.button("Clear", use_container_width=True):
-            st.session_state.canvas_key += 1; st.rerun()
+        canvas_result = st_canvas(
+            stroke_width=22, stroke_color="#FFF", background_color="#000", 
+            height=300, width=300, drawing_mode="freedraw", key=f"c_{st.session_state.canvas_key}"
+        )
+        
+        # ── BUTTON ROW ──
+        btn_c1, btn_c2 = st.columns(2)
+        if btn_c1.button("Clear", use_container_width=True):
+            st.session_state.canvas_key += 1
+            st.session_state.predict_clicked = False
+            st.rerun()
+        
+        if btn_c2.button("Check digit", use_container_width=True):
+            st.session_state.predict_clicked = True
 
     processed = preprocess_drawing(canvas_result.image_data) if canvas_result.image_data is not None else None
 
@@ -188,7 +200,8 @@ with tabs[0]:
         st.subheader("Prediction")
         true_label = st.selectbox("Assign True Label", list(range(10)))
         
-        if processed is not None:
+        # Only run prediction and mismatch warning if "Check digit" was clicked
+        if processed is not None and st.session_state.predict_clicked:
             inp = processed.reshape(1, 28, 28, 1).astype("float32") / 255.0
             preds = st.session_state["model"].predict(inp, verbose=0)[0]
             pred_digit = int(np.argmax(preds))
@@ -197,9 +210,9 @@ with tabs[0]:
             st.markdown(f"## Prediction: `{pred_digit}`")
             st.progress(conf)
             
-            # ── IMPROVED MISMATCH LOGIC (FIXED) ──
+            # Mismatch Warning Banner
             if pred_digit != true_label:
-                st.markdown(f'<div class="banner-warn">⚠️ MISMATCH DETECTED<br>Predicted: {pred_digit} | True Label: {true_label}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="banner-warn">⚠️ MISMATCH DETECTED<br>Predicted: {pred_digit} | Label: {true_label}</div>', unsafe_allow_html=True)
             
             if st.button("🚀 Push & Live Train", use_container_width=True):
                 if client:
@@ -212,7 +225,10 @@ with tabs[0]:
                         with st.spinner("Fine-tuning..."):
                             fetch_sheet_data.clear()
                             train_on_live_recording(spreadsheet_url, sheet_name)
-                        st.toast("Sync Success!"); st.session_state.canvas_key += 1; st.rerun()
+                        st.toast("Sync Success!")
+                        st.session_state.canvas_key += 1
+                        st.session_state.predict_clicked = False
+                        st.rerun()
                     except Exception as e: st.error(f"Sync error: {e}")
 
 with tabs[1]:
