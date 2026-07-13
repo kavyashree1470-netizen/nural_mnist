@@ -25,8 +25,9 @@ st.markdown("""
     }
     .metric-card .value { font-size: 2rem; font-weight: 800; color: #2dd4bf; }
     .banner-warn {
-        background: #451a03; border: 1px solid #f59e0b; border-radius: 10px;
-        padding: 14px; color: #fef3c7; margin: 10px 0; border-left: 5px solid #f59e0b;
+        background: #ff4b4b; border: 1px solid #ffffff; border-radius: 10px;
+        padding: 15px; color: white; margin: 15px 0; border-left: 8px solid #800000;
+        font-size: 1.1rem; font-weight: 900; box-shadow: 0 4px 15px rgba(255, 75, 75, 0.3);
     }
     .lock-screen {
         text-align: center; padding: 40px; background: #131a2e; 
@@ -40,7 +41,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── SESSION STATE (PRO MODEL ARCHITECTURE) ──
-MODEL_VERSION = "CNN_PRO_V2.7_VISUAL"
+MODEL_VERSION = "CNN_PRO_V2.9_STABLE"
 if "model" not in st.session_state or st.session_state.get("m_ver") != MODEL_VERSION:
     model = models.Sequential([
         layers.Input(shape=(28, 28, 1)),
@@ -65,43 +66,23 @@ if "canvas_key" not in st.session_state: st.session_state["canvas_key"] = 0
 
 # ── DYNAMIC NN GRAPH GENERATOR (SVG) ──
 def generate_nn_svg():
-    # Layer definitions: [node_count, color, label]
-    layers_def = [
-        [2, "#4a76c0", "Input Layer"],
-        [4, "#68a34d", "Hidden Layer"],
-        [4, "#68a34d", "Hidden Layer"],
-        [1, "#ffc107", "Output Layer"]
-    ]
-    
-    width = 500
-    height = 300
+    layers_def = [[2, "#4a76c0", "Input Layer"], [4, "#68a34d", "Hidden Layer"], [4, "#68a34d", "Hidden Layer"], [1, "#ffc107", "Output Layer"]]
+    width, height = 500, 300
     svg = f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg">'
-    
-    # Draw Connections (Lines)
     for i in range(len(layers_def) - 1):
-        curr_layer = layers_def[i]
-        next_layer = layers_def[i+1]
-        
-        x1 = 50 + i * 130
-        x2 = 50 + (i + 1) * 130
-        
-        for c in range(curr_layer[0]):
-            y1 = (height / (curr_layer[0] + 1)) * (c + 1)
-            for n in range(next_layer[0]):
-                y2 = (height / (next_layer[0] + 1)) * (n + 1)
-                svg += f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="#333" stroke-width="1" />'
-                
-    # Draw Nodes (Circles)
+        curr_l, next_l = layers_def[i], layers_def[i+1]
+        x1, x2 = 50 + i * 130, 50 + (i + 1) * 130
+        for c in range(curr_l[0]):
+            y1 = (height / (curr_l[0] + 1)) * (c + 1)
+            for n in range(next_l[0]):
+                y2 = (height / (next_l[0] + 1)) * (n + 1)
+                svg += f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="#ccc" stroke-width="1" />'
     for i, layer in enumerate(layers_def):
         x = 50 + i * 130
-        # Text label above
         svg += f'<text x="{x}" y="20" font-family="Arial" font-size="12" text-anchor="middle" fill="#333">{layer[2]}</text>'
-        
         for n in range(layer[0]):
             y = (height / (layer[0] + 1)) * (n + 1)
             svg += f'<circle cx="{x}" cy="{y}" r="15" fill="{layer[1]}" stroke="white" stroke-width="2" />'
-            
-    svg += '<text x="250" y="290" font-family="Arial" font-size="14" text-anchor="middle" font-weight="bold" fill="#333">Artificial Neural Network Graph</text>'
     svg += '</svg>'
     return svg
 
@@ -125,7 +106,7 @@ def fetch_sheet_data(url, name):
         return sh.worksheet(name).get_all_values()
     except: return None
 
-# ── PREPROCESSING (MNIST Accurate) ──
+# ── PREPROCESSING (7 vs 2 Optimization) ──
 def preprocess_drawing(image_data):
     gray = np.max(image_data[:, :, :3], axis=2).astype(np.uint8)
     if np.max(gray) < 30: return None
@@ -141,7 +122,7 @@ def preprocess_drawing(image_data):
 # ── AUTOMATED TRAINING LOGIC ──
 def perform_automated_training():
     if not st.session_state["is_trained"]:
-        with st.status("🚀 Initializing AI Layers...", expanded=False) as status:
+        with st.status("🚀 Neural Network Initializing...", expanded=False) as status:
             (x_train, y_train), _ = tf.keras.datasets.mnist.load_data()
             x_train = x_train[:8000].reshape(-1, 28, 28, 1) / 255.0
             y_train = y_train[:8000]
@@ -171,7 +152,7 @@ st.title("🧠 MNIST CNN Pro Studio")
 op_name = st.text_input("Operator Login", placeholder="Enter name...")
 
 if not op_name:
-    st.markdown('<div class="lock-screen"><h2>🔒 System Locked</h2><p>Please enter your name to access the Studio.</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="lock-screen"><h2>🔒 System Locked</h2><p>Enter name to unlock.</p></div>', unsafe_allow_html=True)
     st.stop()
 
 perform_automated_training()
@@ -205,55 +186,51 @@ with tabs[0]:
 
     with col3:
         st.subheader("Prediction")
-        label = st.selectbox("True Label", list(range(10)))
+        true_label = st.selectbox("Assign True Label", list(range(10)))
+        
         if processed is not None:
             inp = processed.reshape(1, 28, 28, 1).astype("float32") / 255.0
             preds = st.session_state["model"].predict(inp, verbose=0)[0]
             pred_digit = int(np.argmax(preds))
+            conf = float(preds[pred_digit])
+            
             st.markdown(f"## Prediction: `{pred_digit}`")
-            st.progress(float(preds[pred_digit]))
+            st.progress(conf)
+            
+            # ── IMPROVED MISMATCH LOGIC (FIXED) ──
+            if pred_digit != true_label:
+                st.markdown(f'<div class="banner-warn">⚠️ MISMATCH DETECTED<br>Predicted: {pred_digit} | True Label: {true_label}</div>', unsafe_allow_html=True)
             
             if st.button("🚀 Push & Live Train", use_container_width=True):
                 if client:
-                    sh = client.open_by_url(spreadsheet_url) if "http" in spreadsheet_url else client.open_by_key(spreadsheet_url)
-                    wks = sh.worksheet(sheet_name)
-                    row = [int(len(wks.get_all_values())), op_name, int(label), datetime.now().strftime("%H:%M:%S"), "NA"] + [int(p) for p in processed.flatten()]
-                    wks.append_row(row)
-                    with st.spinner("Learning..."):
-                        fetch_sheet_data.clear()
-                        train_on_live_recording(spreadsheet_url, sheet_name)
-                    st.toast("Updated AI model!"); st.session_state.canvas_key += 1; st.rerun()
+                    try:
+                        sh = client.open_by_url(spreadsheet_url) if "http" in spreadsheet_url else client.open_by_key(spreadsheet_url)
+                        wks = sh.worksheet(sheet_name)
+                        mismatch_text = "TRUE" if (pred_digit != true_label) else "FALSE"
+                        row = [int(len(wks.get_all_values())), op_name, int(true_label), datetime.now().strftime("%H:%M:%S"), mismatch_text] + [int(p) for p in processed.flatten()]
+                        wks.append_row(row)
+                        with st.spinner("Fine-tuning..."):
+                            fetch_sheet_data.clear()
+                            train_on_live_recording(spreadsheet_url, sheet_name)
+                        st.toast("Sync Success!"); st.session_state.canvas_key += 1; st.rerun()
+                    except Exception as e: st.error(f"Sync error: {e}")
 
 with tabs[1]:
     st.subheader("📊 Neural Network Studio")
-    
     col_graph, col_metrics = st.columns([1, 1])
-    
     with col_graph:
         st.markdown('<div class="svg-container">', unsafe_allow_html=True)
         st.write(generate_nn_svg(), unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
-        
-        with st.expander("🔍 Architecture Inspector"):
-            summary = []
-            st.session_state["model"].summary(print_fn=lambda x: summary.append(x))
-            st.code("\n".join(summary))
-
     with col_metrics:
-        st.markdown("#### Live Training Playground Metrics")
         if st.session_state["train_history"]["acc"]:
-            metrics_df = pd.DataFrame({
-                "Accuracy": st.session_state["train_history"]["acc"],
-                "Loss": st.session_state["train_history"]["loss"]
-            })
+            metrics_df = pd.DataFrame({"Accuracy": st.session_state["train_history"]["acc"], "Loss": st.session_state["train_history"]["loss"]})
             st.line_chart(metrics_df, height=220)
-            st.metric("Model Confidence (Acc)", f"{st.session_state['train_history']['acc'][-1]:.1%}")
-        else:
-            st.info("Metrics will populate after training.")
+            st.metric("Model Confidence", f"{st.session_state['train_history']['acc'][-1]:.1%}")
 
 with tabs[2]:
     st.subheader("📋 Database Explorer")
-    if st.button("🔄 Refresh Data"): fetch_sheet_data.clear(); st.rerun()
+    if st.button("🔄 Refresh"): fetch_sheet_data.clear(); st.rerun()
     raw_data = fetch_sheet_data(spreadsheet_url, sheet_name)
     if raw_data and len(raw_data) > 1:
         df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
