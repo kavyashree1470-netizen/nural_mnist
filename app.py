@@ -4,7 +4,7 @@ import pandas as pd
 import tensorflow as tf
 from tensorflow.keras import layers, models
 from streamlit_drawable_canvas import st_canvas
-from PIL import Image
+from PIL import Image, ImageFilter
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
@@ -36,18 +36,19 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── SESSION STATE (PRO MODEL ARCHITECTURE) ──
-MODEL_VERSION = "CNN_PRO_V1.6"
+MODEL_VERSION = "CNN_PRO_V1.7_LIVE"
 if "model" not in st.session_state or st.session_state.get("m_ver") != MODEL_VERSION:
     model = models.Sequential([
         layers.Input(shape=(28, 28, 1)),
         layers.Conv2D(32, (3, 3), activation='relu', padding='same'),
+        layers.BatchNormalization(),
         layers.MaxPooling2D((2, 2)),
         layers.Conv2D(64, (3, 3), activation='relu', padding='same'),
+        layers.BatchNormalization(),
         layers.MaxPooling2D((2, 2)),
-        layers.Conv2D(128, (3, 3), activation='relu', padding='same'),
         layers.Flatten(),
-        layers.Dense(256, activation='relu'),
-        layers.Dropout(0.4),
+        layers.Dense(128, activation='relu'),
+        layers.Dropout(0.3),
         layers.Dense(10, activation='softmax')
     ])
     model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
@@ -77,33 +78,50 @@ def fetch_sheet_data(url, name):
         return sh.worksheet(name).get_all_values()
     except: return None
 
-# ── PREPROCESSING (FIXED FOR 7 VS 2 ACCURACY) ──
+# ── IMPROVED PREPROCESSING ──
 def preprocess_drawing(image_data):
+    # Convert to grayscale
     gray = np.max(image_data[:, :, :3], axis=2).astype(np.uint8)
     if np.max(gray) < 25: return None
     
-    # 1. Bounding Box
+    # Bounding Box logic
     coords = np.argwhere(gray > 25)
     y_min, x_min = coords.min(axis=0); y_max, x_max = coords.max(axis=0)
     cropped = gray[y_min:y_max+1, x_min:x_max+1]
     
-    # 2. Proportionate Resize (Ensures 7 bar doesn't curve)
-    pil_crop = Image.fromarray(cropped, 'L')
-    w, h = pil_crop.size
-    if w > h:
-        new_w = 20
-        new_h = max(1, int(20 * h / w))
-    else:
-        new_h = 20
-        new_w = max(1, int(20 * w / h))
+    # Convert to PIL for high-quality filters
+    pil_img = Image.fromarray(cropped, 'L')
     
-    # Using BICUBIC to keep lines sharp for better 7 detection
-    pil_crop = pil_crop.resize((new_w, new_h), Image.Resampling.BICUBIC)
+    # Apply slight Gaussian Blur to smooth jagged edges (helps distinguish 2 vs 7)
+    pil_img = pil_img.filter(ImageFilter.GaussianBlur(radius=0.5))
     
-    # 3. Center
+    # Proportionate Resize
+    w, h = pil_img.size
+    ratio = 20.0 / max(w, h)
+    new_size = (max(1, int(w * ratio)), max(1, int(h * ratio)))
+    pil_img = pil_img.resize(new_size, Image.Resampling.LANCZOS)
+    
+    # Center on 28x28
     canvas = Image.new('L', (28, 28), 0)
-    canvas.paste(pil_crop, ((28 - new_w) // 2, (28 - new_h) // 2))
-    return np.array(canvas)
+    canvas.paste(pil_img, ((28 - new_size[0]) // 2, (28 - new_size[1]) // 2))
+    
+    # Normalize Intensity
+    final_arr = np.array(canvas)
+    if np.max(final_arr) > 0:
+        final_arr = (final_arr.astype(np.float32) / np.max(final_arr) * 255).astype(np.uint8)
+        
+    return final_arr
+
+# ── AUTOMATED TRAINING LOGIC ──
+def auto_train_base_model():
+    if not st.session_state["is_trained"]:
+        with st.spinner("🚀 Initializing AI Brain (Automated Training)..."):
+            (x_train, y_train), _ = tf.keras.datasets.mnist.load_data()
+            # Use a healthy subset for speed and accuracy
+            x_train = x_train[:10000].reshape(-1, 28, 28, 1) / 255.0
+            y_train = y_train[:10000]
+            st.session_state["model"].fit(x_train, y_train, epochs=5, batch_size=64, verbose=0)
+            st.session_state["is_trained"] = True
 
 # ── LOGIN SYSTEM ──
 st.title("🧠 MNIST CNN Pro Studio")
@@ -112,6 +130,9 @@ op_name = st.text_input("Operator Login", placeholder="Enter your name to unlock
 if not op_name:
     st.markdown('<div class="lock-screen"><h2 style="color: #a855f7;">🔒 System Locked</h2><p>Please enter your name above to access the tools.</p></div>', unsafe_allow_html=True)
     st.stop()
+
+# Trigger Auto-Training on Login
+auto_train_base_model()
 
 # ── APP CONTENT ──
 st.sidebar.title("📡 System Status")
@@ -164,18 +185,27 @@ with tabs[0]:
             
             is_mismatch = (pred_digit != label)
             if is_mismatch:
-                st.markdown(f'<div class="banner-warn">⚠️ Mismatch: {pred_digit} != {label}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="banner-warn">⚠️ Mismatch Detected</div>', unsafe_allow_html=True)
 
-            if st.button("🚀 Push to Cloud", use_container_width=True):
+            if st.button("🚀 Push to Cloud & Live Train", use_container_width=True):
                 if client:
                     try:
                         sh = client.open_by_url(spreadsheet_url) if "http" in spreadsheet_url else client.open_by_key(spreadsheet_url)
                         wks = sh.worksheet(sheet_name)
                         mismatch_text = "TRUE" if is_mismatch else "FALSE"
-                        row = [int(len(wks.get_all_values())), op_name, int(label), datetime.now().strftime("%Y-%m-%d %H:%M:%S"), mismatch_text] + [int(p) for p in processed.flatten()]
+                        pixel_list = [int(p) for p in processed.flatten()]
+                        row = [int(len(wks.get_all_values())), op_name, int(label), datetime.now().strftime("%Y-%m-%d %H:%M:%S"), mismatch_text] + pixel_list
                         wks.append_row(row)
+                        
+                        # ── LIVE TRAINING COMPONENT ──
+                        with st.spinner("Learning from this sample..."):
+                            live_x = np.array(pixel_list).reshape(1, 28, 28, 1) / 255.0
+                            live_y = np.array([int(label)])
+                            # Fine-tune model on the current sample (3 epochs for immediate impact)
+                            st.session_state["model"].fit(live_x, live_y, epochs=3, verbose=0)
+                        
                         fetch_sheet_data.clear() 
-                        st.toast("Data Saved!", icon="✅")
+                        st.toast("Data Saved & Model Updated!", icon="✅")
                         st.session_state.canvas_key += 1; st.rerun()
                     except Exception as e: st.error(f"Sync error: {e}")
 
@@ -183,19 +213,16 @@ with tabs[1]:
     st.subheader("📊 Model Training Center")
     col_l, col_r = st.columns(2)
     with col_l:
-        epochs = st.slider("Training Epochs", 1, 50, 15)
-        samples = st.slider("Samples per Digit", 500, 10000, 2000, step=500)
+        st.write("The model is now **automated**. It trains on startup and learns incrementally with every 'Push to Cloud'.")
+        epochs = st.slider("Manual Refinement Epochs", 1, 20, 5)
     with col_r:
-        if st.button("🔥 Start Training on MNIST", use_container_width=True):
-            with st.spinner("Training Pro CNN Model..."):
-                (x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
-                # Get balanced data to ensure 7 and 2 are well-represented
-                x_train = x_train[:samples].reshape(-1, 28, 28, 1)/255.0
-                y_train = y_train[:samples]
-                # Added validation split to prevent the 7/2 confusion
-                st.session_state["model"].fit(x_train, y_train, epochs=epochs, batch_size=64, validation_split=0.1, verbose=0)
-                st.session_state["is_trained"] = True
-                st.success(f"Trained Successfully!")
+        if st.button("🔥 Manual Full Retrain", use_container_width=True):
+            with st.spinner("Retraining..."):
+                (x_train, y_train), _ = tf.keras.datasets.mnist.load_data()
+                x_train = x_train[:5000].reshape(-1, 28, 28, 1)/255.0
+                y_train = y_train[:5000]
+                st.session_state["model"].fit(x_train, y_train, epochs=epochs, batch_size=64, verbose=0)
+                st.success("Retrained successfully!")
 
 with tabs[2]:
     st.subheader("📋 Database Explorer")
