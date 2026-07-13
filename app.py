@@ -4,7 +4,7 @@ import pandas as pd
 import tensorflow as tf
 from tensorflow.keras import layers, models
 from streamlit_drawable_canvas import st_canvas
-from PIL import Image, ImageFilter
+from PIL import Image, ImageOps
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
@@ -13,11 +13,11 @@ import json
 # ── PAGE CONFIGURATION ────────────────────────────────────────────────────────
 st.set_page_config(page_title="MNIST CNN Pro Studio", page_icon="🧠", layout="wide")
 
-# ── CUSTOM CSS ────────────────────────────────────────────────────────────────
+# ── CUSTOM CSS (Unchanged) ────────────────────────────────────────────────────
 st.markdown("""
 <style>
     .stApp { background-color: #0b0f19; color: #f1f5f9; }
-    .status-online { color: #10b981; font-weight: bold; border: 1px solid #10b981; padding: 2px 8px; border-radius: 10px; }
+    .status-online { color: #10b981; font-weight: bold; border: 1px solid #10b981; padding: 2px 8_px; border-radius: 10px; }
     .status-offline { color: #ef4444; font-weight: bold; border: 1px solid #ef4444; padding: 2px 8px; border-radius: 10px; }
     .metric-card {
         background: #131a2e; border: 1px solid #1e293b; border-radius: 12px;
@@ -36,19 +36,19 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── SESSION STATE (PRO MODEL ARCHITECTURE) ──
-MODEL_VERSION = "CNN_PRO_V1.7_LIVE"
+MODEL_VERSION = "CNN_PRO_V2.0_AUTO"
 if "model" not in st.session_state or st.session_state.get("m_ver") != MODEL_VERSION:
     model = models.Sequential([
         layers.Input(shape=(28, 28, 1)),
-        layers.Conv2D(32, (3, 3), activation='relu', padding='same'),
+        layers.Conv2D(32, (3, 3), activation='relu'),
         layers.BatchNormalization(),
         layers.MaxPooling2D((2, 2)),
-        layers.Conv2D(64, (3, 3), activation='relu', padding='same'),
+        layers.Conv2D(64, (3, 3), activation='relu'),
         layers.BatchNormalization(),
         layers.MaxPooling2D((2, 2)),
         layers.Flatten(),
         layers.Dense(128, activation='relu'),
-        layers.Dropout(0.3),
+        layers.Dropout(0.2),
         layers.Dense(10, activation='softmax')
     ])
     model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
@@ -78,50 +78,57 @@ def fetch_sheet_data(url, name):
         return sh.worksheet(name).get_all_values()
     except: return None
 
-# ── IMPROVED PREPROCESSING ──
+# ── ADVANCED PREPROCESSING (FIXED 7 VS 2) ──
 def preprocess_drawing(image_data):
-    # Convert to grayscale
     gray = np.max(image_data[:, :, :3], axis=2).astype(np.uint8)
-    if np.max(gray) < 25: return None
+    if np.max(gray) < 30: return None
     
-    # Bounding Box logic
-    coords = np.argwhere(gray > 25)
+    # 1. Precise Crop
+    coords = np.argwhere(gray > 30)
     y_min, x_min = coords.min(axis=0); y_max, x_max = coords.max(axis=0)
     cropped = gray[y_min:y_max+1, x_min:x_max+1]
     
-    # Convert to PIL for high-quality filters
-    pil_img = Image.fromarray(cropped, 'L')
+    # 2. Resizing with High-Quality Lanczos Filter
+    img = Image.fromarray(cropped, 'L')
+    img.thumbnail((20, 20), Image.Resampling.LANCZOS)
     
-    # Apply slight Gaussian Blur to smooth jagged edges (helps distinguish 2 vs 7)
-    pil_img = pil_img.filter(ImageFilter.GaussianBlur(radius=0.5))
+    # 3. Center in 28x28 with 4-pixel padding (MNIST Standard)
+    new_img = Image.new('L', (28, 28), 0)
+    new_img.paste(img, ((28 - img.size[0]) // 2, (28 - img.size[1]) // 2))
     
-    # Proportionate Resize
-    w, h = pil_img.size
-    ratio = 20.0 / max(w, h)
-    new_size = (max(1, int(w * ratio)), max(1, int(h * ratio)))
-    pil_img = pil_img.resize(new_size, Image.Resampling.LANCZOS)
-    
-    # Center on 28x28
-    canvas = Image.new('L', (28, 28), 0)
-    canvas.paste(pil_img, ((28 - new_size[0]) // 2, (28 - new_size[1]) // 2))
-    
-    # Normalize Intensity
-    final_arr = np.array(canvas)
-    if np.max(final_arr) > 0:
-        final_arr = (final_arr.astype(np.float32) / np.max(final_arr) * 255).astype(np.uint8)
-        
-    return final_arr
+    # 4. Sharpening and Normalization
+    final_array = np.array(new_img)
+    final_array = np.where(final_array > 50, final_array, 0) # De-noising
+    return final_array
 
 # ── AUTOMATED TRAINING LOGIC ──
-def auto_train_base_model():
+def perform_automated_training():
     if not st.session_state["is_trained"]:
-        with st.spinner("🚀 Initializing AI Brain (Automated Training)..."):
+        with st.status("🚀 AI System Initializing...", expanded=False) as status:
+            st.write("Fetching Base MNIST Data...")
             (x_train, y_train), _ = tf.keras.datasets.mnist.load_data()
-            # Use a healthy subset for speed and accuracy
-            x_train = x_train[:10000].reshape(-1, 28, 28, 1) / 255.0
-            y_train = y_train[:10000]
+            x_train = x_train[:8000].reshape(-1, 28, 28, 1) / 255.0
+            y_train = y_train[:8000]
+            st.write("Optimizing Neural Weights...")
             st.session_state["model"].fit(x_train, y_train, epochs=5, batch_size=64, verbose=0)
             st.session_state["is_trained"] = True
+            status.update(label="AI Brain Ready!", state="complete")
+
+def train_on_live_recording(spreadsheet_url, sheet_name):
+    """Re-trains the model using all historical data from the Google Sheet."""
+    data = fetch_sheet_data(spreadsheet_url, sheet_name)
+    if data and len(data) > 5: # Train only if we have a few samples
+        try:
+            df = pd.DataFrame(data[1:], columns=data[0])
+            y_live = df.iloc[:, 2].astype(int).values
+            x_live = df.iloc[:, 5:].astype(float).values / 255.0
+            x_live = x_live.reshape(-1, 28, 28, 1)
+            
+            # Fine-tune model with live user data
+            st.session_state["model"].fit(x_live, y_live, epochs=3, batch_size=8, verbose=0)
+            return True
+        except: return False
+    return False
 
 # ── LOGIN SYSTEM ──
 st.title("🧠 MNIST CNN Pro Studio")
@@ -132,7 +139,7 @@ if not op_name:
     st.stop()
 
 # Trigger Auto-Training on Login
-auto_train_base_model()
+perform_automated_training()
 
 # ── APP CONTENT ──
 st.sidebar.title("📡 System Status")
@@ -185,44 +192,42 @@ with tabs[0]:
             
             is_mismatch = (pred_digit != label)
             if is_mismatch:
-                st.markdown(f'<div class="banner-warn">⚠️ Mismatch Detected</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="banner-warn">⚠️ Mismatch: {pred_digit} != {label}</div>', unsafe_allow_html=True)
 
-            if st.button("🚀 Push to Cloud & Live Train", use_container_width=True):
+            if st.button("🚀 Push to Cloud & Auto-Train", use_container_width=True):
                 if client:
                     try:
                         sh = client.open_by_url(spreadsheet_url) if "http" in spreadsheet_url else client.open_by_key(spreadsheet_url)
                         wks = sh.worksheet(sheet_name)
                         mismatch_text = "TRUE" if is_mismatch else "FALSE"
-                        pixel_list = [int(p) for p in processed.flatten()]
-                        row = [int(len(wks.get_all_values())), op_name, int(label), datetime.now().strftime("%Y-%m-%d %H:%M:%S"), mismatch_text] + pixel_list
+                        row = [int(len(wks.get_all_values())), op_name, int(label), datetime.now().strftime("%Y-%m-%d %H:%M:%S"), mismatch_text] + [int(p) for p in processed.flatten()]
                         wks.append_row(row)
                         
-                        # ── LIVE TRAINING COMPONENT ──
-                        with st.spinner("Learning from this sample..."):
-                            live_x = np.array(pixel_list).reshape(1, 28, 28, 1) / 255.0
-                            live_y = np.array([int(label)])
-                            # Fine-tune model on the current sample (3 epochs for immediate impact)
-                            st.session_state["model"].fit(live_x, live_y, epochs=3, verbose=0)
+                        # LIVE RECORDING TRAINING
+                        with st.spinner("Learning from live recording data..."):
+                            fetch_sheet_data.clear() # Clear cache to get new row
+                            success = train_on_live_recording(spreadsheet_url, sheet_name)
                         
-                        fetch_sheet_data.clear() 
-                        st.toast("Data Saved & Model Updated!", icon="✅")
+                        if success: st.toast("Synced & AI Re-trained!", icon="🔥")
+                        else: st.toast("Data Saved!", icon="✅")
+                        
                         st.session_state.canvas_key += 1; st.rerun()
                     except Exception as e: st.error(f"Sync error: {e}")
 
 with tabs[1]:
     st.subheader("📊 Model Training Center")
+    st.info("Automation Active: Model trains on login and fine-tunes itself whenever you push data to the cloud.")
     col_l, col_r = st.columns(2)
     with col_l:
-        st.write("The model is now **automated**. It trains on startup and learns incrementally with every 'Push to Cloud'.")
-        epochs = st.slider("Manual Refinement Epochs", 1, 20, 5)
+        epochs = st.slider("Manual Refine Epochs", 1, 50, 10)
     with col_r:
-        if st.button("🔥 Manual Full Retrain", use_container_width=True):
-            with st.spinner("Retraining..."):
+        if st.button("🔥 Force Manual Retrain", use_container_width=True):
+            with st.spinner("Refining..."):
                 (x_train, y_train), _ = tf.keras.datasets.mnist.load_data()
-                x_train = x_train[:5000].reshape(-1, 28, 28, 1)/255.0
-                y_train = y_train[:5000]
+                x_train = x_train[:4000].reshape(-1, 28, 28, 1)/255.0
+                y_train = y_train[:4000]
                 st.session_state["model"].fit(x_train, y_train, epochs=epochs, batch_size=64, verbose=0)
-                st.success("Retrained successfully!")
+                st.success("Refinement Complete!")
 
 with tabs[2]:
     st.subheader("📋 Database Explorer")
