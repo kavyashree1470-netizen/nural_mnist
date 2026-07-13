@@ -9,12 +9,11 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 import json
-import graphviz # Added for the Playground Visualization
 
 # ── PAGE CONFIGURATION ────────────────────────────────────────────────────────
 st.set_page_config(page_title="MNIST CNN Pro Studio", page_icon="🧠", layout="wide")
 
-# ── CUSTOM CSS ────────────────────────────────────────────────────────────────
+# ── CUSTOM CSS (Includes Playground Styles) ───────────────────────────────────
 st.markdown("""
 <style>
     .stApp { background-color: #0b0f19; color: #f1f5f9; }
@@ -29,6 +28,11 @@ st.markdown("""
         background: #451a03; border: 1px solid #f59e0b; border-radius: 10px;
         padding: 14px; color: #fef3c7; margin: 10px 0; border-left: 5px solid #f59e0b;
     }
+    /* Playground Style Schematic */
+    .nn-layer {
+        background: #1e293b; border-left: 4px solid #a855f7;
+        padding: 10px; margin: 5px 0; border-radius: 4px; font-family: monospace;
+    }
     .lock-screen {
         text-align: center; padding: 40px; background: #131a2e; 
         border-radius: 20px; border: 2px dashed #a855f7; margin-top: 20px;
@@ -37,7 +41,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── SESSION STATE (PRO MODEL ARCHITECTURE) ──
-MODEL_VERSION = "CNN_PRO_V2.5_PLAYGROUND"
+MODEL_VERSION = "CNN_PRO_V2.6_FIXED"
 if "model" not in st.session_state or st.session_state.get("m_ver") != MODEL_VERSION:
     model = models.Sequential([
         layers.Input(shape=(28, 28, 1)),
@@ -60,26 +64,6 @@ if "model" not in st.session_state or st.session_state.get("m_ver") != MODEL_VER
 
 if "canvas_key" not in st.session_state: st.session_state["canvas_key"] = 0
 
-# ── VISUALIZATION: NN PLAYGROUND GRAPH ──
-def draw_neural_playground():
-    dot = graphviz.Digraph(comment='Neural Network Playground')
-    dot.attr(rankdir='LR', bgcolor='#131a2e', fontcolor='white')
-    dot.attr('node', shape='circle', color='#2dd4bf', fontcolor='white', style='filled', fillcolor='#1e293b')
-    
-    # Layers visualization
-    dot.node('In', 'Input\n28x28')
-    dot.node('C1', 'Conv2D\n32 Filters')
-    dot.node('P1', 'MaxPool')
-    dot.node('C2', 'Conv2D\n64 Filters')
-    dot.node('P2', 'MaxPool')
-    dot.node('F', 'Flatten')
-    dot.node('D1', 'Dense\n128 Neurons')
-    dot.node('Out', 'Output\n(0-9)')
-    
-    # Edges
-    dot.edges(['InC1', 'C1P1', 'P1C2', 'C2P2', 'P2F', 'FD1', 'D1Out'])
-    return dot
-
 # ── GOOGLE SHEETS CORE ──
 @st.cache_resource
 def get_sheets_client():
@@ -100,7 +84,7 @@ def fetch_sheet_data(url, name):
         return sh.worksheet(name).get_all_values()
     except: return None
 
-# ── PREPROCESSING (7 vs 2 Accuracy preserved) ──
+# ── PREPROCESSING (Accurate for 7 vs 2) ──
 def preprocess_drawing(image_data):
     gray = np.max(image_data[:, :, :3], axis=2).astype(np.uint8)
     if np.max(gray) < 30: return None
@@ -116,18 +100,15 @@ def preprocess_drawing(image_data):
 # ── AUTOMATED TRAINING LOGIC ──
 def perform_automated_training():
     if not st.session_state["is_trained"]:
-        with st.status("🚀 Automated Training Active...", expanded=False) as status:
+        with st.status("🚀 Neural Network Auto-Initializing...", expanded=False) as status:
             (x_train, y_train), _ = tf.keras.datasets.mnist.load_data()
             x_train = x_train[:8000].reshape(-1, 28, 28, 1) / 255.0
             y_train = y_train[:8000]
             history = st.session_state["model"].fit(x_train, y_train, epochs=5, batch_size=64, verbose=0)
-            
-            # Store history for playground chart
             st.session_state["train_history"]["acc"].extend(history.history['accuracy'])
             st.session_state["train_history"]["loss"].extend(history.history['loss'])
-            
             st.session_state["is_trained"] = True
-            status.update(label="Initial Model Trained!", state="complete")
+            status.update(label="AI Trained & Ready!", state="complete")
 
 def train_on_live_recording(spreadsheet_url, sheet_name):
     data = fetch_sheet_data(spreadsheet_url, sheet_name)
@@ -138,7 +119,6 @@ def train_on_live_recording(spreadsheet_url, sheet_name):
             x_live = df.iloc[:, 5:].astype(float).values / 255.0
             x_live = x_live.reshape(-1, 28, 28, 1)
             history = st.session_state["model"].fit(x_live, y_live, epochs=2, batch_size=4, verbose=0)
-            # Update history for live recording
             st.session_state["train_history"]["acc"].append(history.history['accuracy'][-1])
             st.session_state["train_history"]["loss"].append(history.history['loss'][-1])
             return True
@@ -192,57 +172,63 @@ with tabs[0]:
             st.markdown(f"## Prediction: `{pred_digit}`")
             st.progress(float(preds[pred_digit]))
             
-            if st.button("🚀 Push & Auto-Train", use_container_width=True):
+            if st.button("🚀 Push & Live Train", use_container_width=True):
                 if client:
                     sh = client.open_by_url(spreadsheet_url) if "http" in spreadsheet_url else client.open_by_key(spreadsheet_url)
                     wks = sh.worksheet(sheet_name)
                     row = [int(len(wks.get_all_values())), op_name, int(label), datetime.now().strftime("%H:%M:%S"), "NA"] + [int(p) for p in processed.flatten()]
                     wks.append_row(row)
-                    with st.spinner("Live Training..."):
+                    with st.spinner("Learning from recording..."):
                         fetch_sheet_data.clear()
                         train_on_live_recording(spreadsheet_url, sheet_name)
-                    st.toast("Saved & Re-trained!"); st.session_state.canvas_key += 1; st.rerun()
+                    st.toast("Updated AI model!"); st.session_state.canvas_key += 1; st.rerun()
 
 with tabs[1]:
     st.subheader("📊 Neural Network Playground")
     
-    # NEW: Visual Playground Layout
-    col_play, col_metrics = st.columns([1, 1])
+    col_arch, col_stats = st.columns([1, 1.2])
     
-    with col_play:
-        st.markdown("#### Network Topology")
-        st.graphviz_chart(draw_neural_playground())
+    with col_arch:
+        st.markdown("#### Topology schematic")
+        # Custom CSS Architecture diagram (Playground style)
+        st.markdown("""
+        <div class="nn-layer">📥 <b>Input Layer</b>: 28x28 Grayscale</div>
+        <div style="text-align:center; color:#a855f7">⬇️</div>
+        <div class="nn-layer">🌀 <b>Conv2D</b>: 32 filters, ReLU</div>
+        <div style="text-align:center; color:#a855f7">⬇️</div>
+        <div class="nn-layer">📉 <b>MaxPool</b>: 2x2 spatial reduction</div>
+        <div style="text-align:center; color:#a855f7">⬇️</div>
+        <div class="nn-layer">🌀 <b>Conv2D</b>: 64 filters, ReLU</div>
+        <div style="text-align:center; color:#a855f7">⬇️</div>
+        <div class="nn-layer">⬛ <b>Flatten</b>: Matrix to Vector</div>
+        <div style="text-align:center; color:#a855f7">⬇️</div>
+        <div class="nn-layer">🧠 <b>Dense</b>: 128 Neurons (Hidden)</div>
+        <div style="text-align:center; color:#a855f7">⬇️</div>
+        <div class="nn-layer">📤 <b>Output</b>: Softmax (10 Digits)</div>
+        """, unsafe_allow_html=True)
         
-        with st.expander("🔍 Layer Details (Playground Inspector)"):
-            summary = []
-            st.session_state["model"].summary(print_fn=lambda x: summary.append(x))
-            st.code("\n".join(summary))
-
-    with col_metrics:
-        st.markdown("#### Training Metrics Chat/Log")
+    with col_stats:
+        st.markdown("#### Live Playground Metrics")
         if st.session_state["train_history"]["acc"]:
-            # Display live accuracy chart
             metrics_df = pd.DataFrame({
-                "Accuracy": st.session_state["train_history"]["acc"],
-                "Loss": st.session_state["train_history"]["loss"]
+                "Accuracy (%)": [x * 100 for x in st.session_state["train_history"]["acc"]],
+                "Loss (Error)": st.session_state["train_history"]["loss"]
             })
-            st.line_chart(metrics_df, height=250)
-            
-            # Show specific values
-            curr_acc = st.session_state["train_history"]["acc"][-1]
-            curr_loss = st.session_state["train_history"]["loss"][-1]
+            st.line_chart(metrics_df, height=260)
             c1, c2 = st.columns(2)
-            c1.metric("Current Accuracy", f"{curr_acc:.2%}")
-            c2.metric("Current Loss", f"{curr_loss:.4f}")
+            c1.metric("Current Accuracy", f"{st.session_state['train_history']['acc'][-1]:.1%}")
+            c2.metric("Loss Score", f"{st.session_state['train_history']['loss'][-1]:.4f}")
         else:
-            st.info("Log in to see training metrics.")
+            st.info("Training data log will appear here.")
 
-    if st.button("🔥 Force Full MNIST Refresh", use_container_width=True):
-        st.session_state["is_trained"] = False; st.rerun()
+    with st.expander("🔍 Deep Model Summary"):
+        summary = []
+        st.session_state["model"].summary(print_fn=lambda x: summary.append(x))
+        st.code("\n".join(summary))
 
 with tabs[2]:
     st.subheader("📋 Database Explorer")
-    if st.button("🔄 Refresh"): fetch_sheet_data.clear(); st.rerun()
+    if st.button("🔄 Refresh Data"): fetch_sheet_data.clear(); st.rerun()
     raw_data = fetch_sheet_data(spreadsheet_url, sheet_name)
     if raw_data and len(raw_data) > 1:
         df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
