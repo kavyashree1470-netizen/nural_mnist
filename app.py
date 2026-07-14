@@ -23,7 +23,6 @@ st.markdown("""
         background: #131a2e; border: 1px solid #1e293b; border-radius: 12px;
         padding: 16px; text-align: center; margin-bottom: 10px;
     }
-    .metric-card .value { font-size: 2rem; font-weight: 800; color: #2dd4bf; }
     .banner-warn {
         background: #ff4b4b; border: 1px solid #ffffff; border-radius: 10px;
         padding: 15px; color: white; margin: 15px 0; border-left: 8px solid #800000;
@@ -192,8 +191,10 @@ else: st.sidebar.markdown("Status: <span class='status-offline'>○ Offline</spa
 tabs = st.tabs(["✏️ Sandbox", "📊 Neural Network Studio", "📋 Database Explorer"])
 
 with tabs[0]:
-    col1, col2, col3 = st.columns([2, 1.5, 1.5])
-    with col1:
+    # ROW 1: CANVAS AND PREDICTION
+    r1_col1, r1_col2 = st.columns([1, 1])
+    
+    with r1_col1:
         st.subheader("Canvas")
         canvas_result = st_canvas(
             stroke_width=22, stroke_color="#FFF", background_color="#000", 
@@ -210,24 +211,20 @@ with tabs[0]:
 
     processed = preprocess_drawing(canvas_result.image_data) if canvas_result.image_data is not None else None
 
-    with col2:
-        st.subheader("Preprocessing")
-        if processed is not None:
-            st.image(processed, width=220, caption="CNN Ready Input")
-        else: st.info("Draw on canvas.")
-
-    with col3:
-        st.subheader("Prediction")
+    with r1_col2:
+        st.subheader("Prediction Control")
         true_label = st.selectbox("Assign True Label", list(range(10)))
         if processed is not None and st.session_state.predict_clicked:
             inp = processed.reshape(1, 28, 28, 1).astype("float32") / 255.0
             preds = st.session_state["model"].predict(inp, verbose=0)[0]
             st.session_state["last_preds"] = preds
             pred_digit = int(np.argmax(preds))
-            st.markdown(f"## Prediction: `{pred_digit}`")
+            st.markdown(f"## Predicted Digit: `{pred_digit}`")
             st.progress(float(preds[pred_digit]))
+            
             if pred_digit != true_label:
                 st.markdown(f'<div class="banner-warn">⚠️ MISMATCH DETECTED<br>Predicted: {pred_digit} | Label: {true_label}</div>', unsafe_allow_html=True)
+            
             if st.button("🚀 Push & Live Train", use_container_width=True):
                 if client:
                     try:
@@ -244,30 +241,41 @@ with tabs[0]:
                         st.session_state.predict_clicked = False
                         st.rerun()
                     except Exception as e: st.error(f"Sync error: {e}")
+        else:
+            st.info("Draw a digit and click 'Check digit' to see analysis.")
 
-    # ── SANDBOX LIVE GRAPH ──
+    # ROW 2: PREPROCESSING AND LIVE PULSE (SIDE-BY-SIDE)
     st.divider()
-    st.markdown("### ⚡ Live Neural Network Pulse")
-    st.markdown('<div class="svg-container">', unsafe_allow_html=True)
-    st.write(generate_nn_svg(st.session_state.get("last_preds")), unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+    r2_col1, r2_col2 = st.columns([1, 2.5])
+    
+    with r2_col1:
+        st.subheader("Preprocessing")
+        if processed is not None:
+            st.image(processed, width=220, caption="28x28 CNN Input")
+        else:
+            st.write("Waiting for input...")
 
-with tabs[1]:
-    st.subheader("📊 Neural Network Studio")
-    col_graph, col_metrics = st.columns([1.2, 0.8])
-    with col_graph:
+    with r2_col2:
+        st.subheader("⚡ Live Neural Network Pulse")
         st.markdown('<div class="svg-container">', unsafe_allow_html=True)
         st.write(generate_nn_svg(st.session_state.get("last_preds")), unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
-    with col_metrics:
-        if st.session_state["train_history"]["acc"]:
-            metrics_df = pd.DataFrame({"Accuracy": st.session_state["train_history"]["acc"], "Loss": st.session_state["train_history"]["loss"]})
-            st.line_chart(metrics_df, height=220)
-            st.metric("Model Confidence", f"{st.session_state['train_history']['acc'][-1]:.1%}")
+
+with tabs[1]:
+    st.subheader("📊 Performance Metrics")
+    if st.session_state["train_history"]["acc"]:
+        metrics_df = pd.DataFrame({
+            "Accuracy": st.session_state["train_history"]["acc"], 
+            "Loss": st.session_state["train_history"]["loss"]
+        })
+        st.line_chart(metrics_df, height=350)
+        st.metric("Current Training Accuracy", f"{st.session_state['train_history']['acc'][-1]:.1%}")
+    else:
+        st.warning("No training data available yet.")
 
 with tabs[2]:
     st.subheader("📋 Database Explorer")
-    if st.button("🔄 Refresh"): fetch_sheet_data.clear(); st.rerun()
+    if st.button("🔄 Refresh Data"): fetch_sheet_data.clear(); st.rerun()
     raw_data = fetch_sheet_data(spreadsheet_url, sheet_name)
     if raw_data and len(raw_data) > 1:
         df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
