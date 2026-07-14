@@ -34,9 +34,15 @@ st.markdown("""
         border-radius: 20px; border: 2px dashed #a855f7; margin-top: 20px;
     }
     .svg-container {
-        background: white; border-radius: 15px; padding: 20px; 
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); text-align: center;
+        background: #f8fafc; border-radius: 15px; padding: 20px; 
+        box-shadow: 0 10px 25px rgba(0,0,0,0.3); text-align: center;
     }
+    @keyframes pulse {
+        0% { stroke-width: 2; r: 15; }
+        50% { stroke-width: 4; r: 17; }
+        100% { stroke-width: 2; r: 15; }
+    }
+    .active-node { animation: pulse 1.5s infinite; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -61,29 +67,60 @@ if "model" not in st.session_state or st.session_state.get("m_ver") != MODEL_VER
     st.session_state["m_ver"] = MODEL_VERSION
     st.session_state["is_trained"] = False
     st.session_state["train_history"] = {"acc": [], "loss": []}
+    st.session_state["last_preds"] = None # Store live activations
 
 if "canvas_key" not in st.session_state: st.session_state["canvas_key"] = 0
 if "predict_clicked" not in st.session_state: st.session_state["predict_clicked"] = False
 
-# ── DYNAMIC NN GRAPH GENERATOR (SVG) ──
-def generate_nn_svg():
-    layers_def = [[2, "#4a76c0", "Input Layer"], [4, "#68a34d", "Hidden Layer"], [4, "#68a34d", "Hidden Layer"], [1, "#ffc107", "Output Layer"]]
-    width, height = 500, 300
-    svg = f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg">'
+# ── DYNAMIC NN GRAPH GENERATOR (REAL-TIME SVG) ──
+def generate_nn_svg(activations=None):
+    # layers_def: [node_count, color, label]
+    # Representing a simplified view of the actual model
+    layers_def = [
+        [5, "#4a76c0", "Input (28x28)"], 
+        [8, "#6366f1", "Conv+Pool"], 
+        [6, "#8b5cf6", "Dense (128)"], 
+        [10, "#f59e0b", "Output (0-9)"]
+    ]
+    width, height = 600, 350
+    svg = f'<svg width="100%" height="{height}" viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg">'
+    
+    # Draw Connections
     for i in range(len(layers_def) - 1):
         curr_l, next_l = layers_def[i], layers_def[i+1]
-        x1, x2 = 50 + i * 130, 50 + (i + 1) * 130
+        x1, x2 = 60 + i * 160, 60 + (i + 1) * 160
         for c in range(curr_l[0]):
             y1 = (height / (curr_l[0] + 1)) * (c + 1)
             for n in range(next_l[0]):
                 y2 = (height / (next_l[0] + 1)) * (n + 1)
-                svg += f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="#ccc" stroke-width="1" />'
+                opacity = 0.15
+                # If it's the connection to the output, make it highlight based on activation
+                if i == 2 and activations is not None:
+                    opacity = max(0.1, activations[n])
+                svg += f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="#cbd5e1" stroke-width="1" stroke-opacity="{opacity}" />'
+
+    # Draw Nodes
     for i, layer in enumerate(layers_def):
-        x = 50 + i * 130
-        svg += f'<text x="{x}" y="20" font-family="Arial" font-size="12" text-anchor="middle" fill="#333">{layer[2]}</text>'
+        x = 60 + i * 160
+        svg += f'<text x="{x}" y="25" font-family="sans-serif" font-weight="bold" font-size="12" text-anchor="middle" fill="#475569">{layer[2]}</text>'
         for n in range(layer[0]):
             y = (height / (layer[0] + 1)) * (n + 1)
-            svg += f'<circle cx="{x}" cy="{y}" r="15" fill="{layer[1]}" stroke="white" stroke-width="2" />'
+            fill_color = layer[1]
+            extra_attr = ""
+            
+            # Real-time update for Output Layer
+            if i == 3 and activations is not None:
+                alpha = hex(int(max(0.2, activations[n]) * 255))[2:].zfill(2)
+                fill_color = f"#10b981{alpha}" # Green highlight for active
+                if activations[n] == max(activations):
+                    extra_attr = 'class="active-node" stroke="#059669" stroke-width="3"'
+            
+            svg += f'<circle cx="{x}" cy="{y}" r="12" fill="{fill_color}" stroke="white" stroke-width="2" {extra_attr} />'
+            
+            # Label Output nodes 0-9
+            if i == 3:
+                svg += f'<text x="{x}" y="{y+4}" font-family="sans-serif" font-size="9" font-weight="bold" text-anchor="middle" fill="white">{n}</text>'
+                
     svg += '</svg>'
     return svg
 
@@ -178,11 +215,11 @@ with tabs[0]:
             height=300, width=300, drawing_mode="freedraw", key=f"c_{st.session_state.canvas_key}"
         )
         
-        # ── BUTTON ROW ──
         btn_c1, btn_c2 = st.columns(2)
         if btn_c1.button("Clear", use_container_width=True):
             st.session_state.canvas_key += 1
             st.session_state.predict_clicked = False
+            st.session_state["last_preds"] = None
             st.rerun()
         
         if btn_c2.button("Check digit", use_container_width=True):
@@ -200,17 +237,16 @@ with tabs[0]:
         st.subheader("Prediction")
         true_label = st.selectbox("Assign True Label", list(range(10)))
         
-        # Only run prediction and mismatch warning if "Check digit" was clicked
         if processed is not None and st.session_state.predict_clicked:
             inp = processed.reshape(1, 28, 28, 1).astype("float32") / 255.0
             preds = st.session_state["model"].predict(inp, verbose=0)[0]
+            st.session_state["last_preds"] = preds # Update global activations
             pred_digit = int(np.argmax(preds))
             conf = float(preds[pred_digit])
             
             st.markdown(f"## Prediction: `{pred_digit}`")
             st.progress(conf)
             
-            # Mismatch Warning Banner
             if pred_digit != true_label:
                 st.markdown(f'<div class="banner-warn">⚠️ MISMATCH DETECTED<br>Predicted: {pred_digit} | Label: {true_label}</div>', unsafe_allow_html=True)
             
@@ -233,16 +269,19 @@ with tabs[0]:
 
 with tabs[1]:
     st.subheader("📊 Neural Network Studio")
-    col_graph, col_metrics = st.columns([1, 1])
+    col_graph, col_metrics = st.columns([1.2, 0.8])
     with col_graph:
+        st.markdown("**Live Architecture Visualizer**")
         st.markdown('<div class="svg-container">', unsafe_allow_html=True)
-        st.write(generate_nn_svg(), unsafe_allow_html=True)
+        # Pass live activations to the SVG generator
+        st.write(generate_nn_svg(st.session_state.get("last_preds")), unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
+        st.caption("The graph updates in real-time when 'Check Digit' is pressed in the Sandbox.")
     with col_metrics:
         if st.session_state["train_history"]["acc"]:
             metrics_df = pd.DataFrame({"Accuracy": st.session_state["train_history"]["acc"], "Loss": st.session_state["train_history"]["loss"]})
             st.line_chart(metrics_df, height=220)
-            st.metric("Model Confidence", f"{st.session_state['train_history']['acc'][-1]:.1%}")
+            st.metric("Global Model Confidence", f"{st.session_state['train_history']['acc'][-1]:.1%}")
 
 with tabs[2]:
     st.subheader("📋 Database Explorer")
