@@ -148,9 +148,11 @@ def perform_automated_training():
     if not st.session_state["is_trained"]:
         with st.status("🚀 Neural Network Initializing...", expanded=False) as status:
             (x_train, y_train), _ = tf.keras.datasets.mnist.load_data()
-            x_train = x_train[:8000].reshape(-1, 28, 28, 1) / 255.0
-            y_train = y_train[:8000]
-            history = st.session_state["model"].fit(x_train, y_train, epochs=5, batch_size=64, verbose=0)
+            # INCREASED DATA: From 8,000 to 25,000 to better recognize "7" vs "2"
+            x_train = x_train[:25000].reshape(-1, 28, 28, 1) / 255.0
+            y_train = y_train[:25000]
+            # INCREASED EPOCHS: To 10 for better convergence
+            history = st.session_state["model"].fit(x_train, y_train, epochs=10, batch_size=64, verbose=0)
             st.session_state["train_history"]["acc"].extend(history.history['accuracy'])
             st.session_state["train_history"]["loss"].extend(history.history['loss'])
             st.session_state["is_trained"] = True
@@ -197,7 +199,8 @@ with tabs[0]:
     with r1_col1:
         st.subheader("Canvas")
         canvas_result = st_canvas(
-            stroke_width=22, stroke_color="#FFF", background_color="#000", 
+            stroke_width=18, # REDUCED from 22: Thinner lines prevent "7" looking like "2" or "3"
+            stroke_color="#FFF", background_color="#000", 
             height=300, width=300, drawing_mode="freedraw", key=f"c_{st.session_state.canvas_key}"
         )
         btn_c1, btn_c2 = st.columns(2)
